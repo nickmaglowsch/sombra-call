@@ -9,10 +9,11 @@ records which one is in use. Both paths, and the mic, are opened through PortAud
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import importlib
 import logging
 import platform
-from collections.abc import AsyncIterator, Callable, Mapping, Sequence
+from collections.abc import AsyncIterator, Callable
 from typing import Any, Protocol
 
 import numpy as np
@@ -150,13 +151,17 @@ class MacAudioSource:
         if self._started:
             return
         self._started = True
+        with contextlib.suppress(RuntimeError):  # no running loop: caller binds the queue
+            self._queue.bind(asyncio.get_running_loop())
         sd = self._sounddevice()
-        raw = sd.query_devices()
-        mic = find_device(raw, self.mic) if self.mic else default_input(raw, _default_in(sd))
-        system = self._resolve_system(sd, raw)
-        log.info("audio: mic=%r system=%r via %s", mic.id, system.id, self.system_path)
-        self.mic_id = mic.id
+        # System first: the tap path re-initialises PortAudio, which can renumber every
+        # device, so the mic is resolved (by id) only from the final enumeration.
+        system = self._resolve_system(sd)
         try:
+            raw = sd.query_devices()
+            mic = find_device(raw, self.mic) if self.mic else default_input(raw, _default_in(sd))
+            log.info("audio: mic=%r system=%r via %s", mic.id, system.id, self.system_path)
+            self.mic_id = mic.id
             self._open(sd, mic, Channel.ME)
             self._open(sd, system, Channel.OTHERS)
         except Exception:
@@ -169,7 +174,7 @@ class MacAudioSource:
                 self._tap = None
             raise
 
-    def _resolve_system(self, sd: Any, raw: Sequence[Mapping[str, Any]]) -> InputDevice:
+    def _resolve_system(self, sd: Any) -> InputDevice:
         want_tap = self.system == TAP_ID or (
             self.system == AUTO and tap_supported(self._macos_release)
         )
@@ -180,6 +185,7 @@ class MacAudioSource:
                 if self.system == TAP_ID:
                     raise
                 log.warning("audio: process tap unavailable (%s); trying a loopback device", e)
+        raw = sd.query_devices()
         if self.system in (AUTO, TAP_ID):
             dev = find_loopback(raw)
             if dev is None:

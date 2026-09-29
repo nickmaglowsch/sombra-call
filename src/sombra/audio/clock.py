@@ -46,8 +46,9 @@ class HostSyncedTimer:
     received so far and the host time at the callback (≈ end of that buffer). The
     timer keeps ``time(sample) = anchor + sample / rate + correction`` and slews
     ``correction`` gently towards the host clock, so callback jitter is smoothed out
-    while device-clock drift (tens of ppm) is tracked. A large error (a dropout, the
-    OS skipping audio) re-anchors at once. Stamps are strictly increasing.
+    while device-clock drift (tens of ppm) is tracked. A large forward error (a dropout,
+    the OS skipping audio) re-anchors at once; backward errors are always slewed, so
+    chunk spacing stays natural. Stamps are strictly increasing.
     """
 
     def __init__(
@@ -73,10 +74,12 @@ class HostSyncedTimer:
             self._anchor_ns = host_ns - expected
             return
         err = (host_ns - self._anchor_ns - expected) - self._correction_ns
-        if abs(err) > self._resync_ns:
+        if err > self._resync_ns:  # audio went missing (dropout): jump forward at once
             self._correction_ns += err
             self.resyncs += 1
             return
+        # Backward errors only ever slew: a jump back would squash the next chunks onto
+        # one instant to keep stamps increasing.
         step = max(-self._max_slew_ns, min(self._max_slew_ns, err * self._gain))
         self._correction_ns += step
 

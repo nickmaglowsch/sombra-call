@@ -20,8 +20,11 @@ macOS asks the first time Sombra captures. Grant them to the app that runs `somb
 | Microphone | System Settings → Privacy & Security → Microphone | your voice (`EU`) |
 | Screen & System Audio Recording (the "System Audio Recording Only" list on macOS 15) | System Settings → Privacy & Security → Screen & System Audio Recording | system audio through the process tap (`OUTROS`) |
 
-Without the second permission the process tap fails. With `audio.system = "auto"`
-Sombra then falls back to a BlackHole device if one is installed, and logs which path it used.
+Without the second permission, macOS may still create the process tap and then deliver
+**silence** instead of an error (still to be confirmed on hardware), so `auto` cannot rely
+on falling back. If `OUTROS` stays silent while the call is audible, check this permission
+first. When tap creation does fail outright, `audio.system = "auto"` falls back to a
+BlackHole device if one is installed, and logs which path it used.
 
 ## Choosing devices
 

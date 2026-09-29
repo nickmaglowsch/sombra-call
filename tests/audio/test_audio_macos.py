@@ -184,3 +184,47 @@ def test_tap_module_imports_everywhere() -> None:
 
     tap = CoreAudioTap(tap_id=1, aggregate_id=2, device_name=f"{TAP_DEVICE_PREFIX} x")
     assert tap.device_name.startswith("Sombra")
+
+
+def test_mic_is_resolved_after_portaudio_reinit_renumbers_devices() -> None:
+    class ReorderingSd(FakeSounddevice):
+        def _initialize(self) -> None:
+            super()._initialize()
+            # PortAudio re-enumerates in a new order: the aggregate lands first.
+            self.devices.insert(0, self.devices.pop())
+            self.default.device = [4, 2]  # same default mic, new index
+
+    rsd = ReorderingSd()
+    rsd.default.device = [3, 1]  # "USB Mic" is the default input before the re-init
+    src, _ = _source(rsd, mic="USB Mic#2")
+    src.start()
+    mic, system = rsd.streams
+    names = [d["name"] for d in rsd.query_devices()]
+    assert names[system.kwargs["device"]].startswith("Sombra system audio")
+    assert (names[mic.kwargs["device"]], mic.kwargs["samplerate"]) == ("USB Mic", 16_000)
+    assert mic.kwargs["device"] == 5  # "USB Mic#2" moved from index 4 to 5
+
+    src2, _ = _source(rsd2 := ReorderingSd())
+    rsd2.default.device = [3, 1]
+    src2.start()
+    assert rsd2.streams[0].kwargs["device"] == 4  # default "USB Mic" at its new index
+
+
+def test_missing_mic_after_tap_destroys_tap() -> None:
+    sd = FakeSounddevice()
+    src, taps = _source(sd, mic="Nope")
+    with pytest.raises(LookupError):
+        src.start()
+    assert taps[0].destroyed
+    assert sd.streams == []
+
+
+async def test_start_binds_running_loop() -> None:
+    sd = FakeSounddevice()
+    src, _ = _source(sd)
+    src.start()
+    getter = asyncio.create_task(src._queue.get())
+    await asyncio.sleep(0)
+    sd.streams[0].feed(0.1)  # callbacks from another thread must wake the consumer
+    assert (await asyncio.wait_for(getter, 2)) is not None
+    await src.close()

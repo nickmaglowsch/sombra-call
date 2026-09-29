@@ -88,9 +88,17 @@ def test_large_gap_resyncs_immediately() -> None:
     assert timer.stamp(3200) - before == pytest.approx(2_100_000_000, abs=1_000_000)
 
 
-def test_backwards_correction_is_clamped_to_monotonic() -> None:
-    timer = HostSyncedTimer(16_000, resync_ns=1)
-    timer.observe(1600, 10 * NS)
-    a = timer.stamp(1600)
-    timer.observe(3200, 10 * NS - NS)  # host says we are far behind
-    assert timer.stamp(1600) > a
+def test_backward_error_slews_instead_of_squashing_chunks() -> None:
+    # The first callback arrived late, so the anchor is too late: the host clock then
+    # reads 300 ms *behind* the sample count.
+    timer = HostSyncedTimer(16_000)
+    timer.observe(160, 10 * NS)
+    stamps = [timer.stamp(0)]
+    for i in range(2, 200):
+        timer.observe(160 * i, 10 * NS + (i - 1) * 10_000_000 - 300_000_000)
+        stamps.append(timer.stamp(160 * (i - 1)))
+    assert timer.resyncs == 0
+    gaps = [b - a for a, b in pairwise(stamps)]
+    # Each 10 ms step shrinks by at most the 0.5 ms slew: never squashed to ~0.
+    assert min(gaps) >= 10_000_000 - 500_001
+    assert all(g > 0 for g in gaps)
