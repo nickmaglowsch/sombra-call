@@ -20,11 +20,13 @@ def parse(*argv: str) -> argparse.Namespace:
     return build_parser().parse_args(list(argv))
 
 
-def write_config(tmp_path: Path, name: str = "Mariana", level: str = "L2") -> Path:
+def write_config(
+    tmp_path: Path, name: str = "Mariana", level: str = "L2", backend: str = "claude"
+) -> Path:
     path = tmp_path / "config.toml"
     path.write_text(
         f'meetings_root = "{tmp_path / "meetings"}"\nautonomy_level = "{level}"\n'
-        f'[user]\nname = "{name}"\n',
+        f'[user]\nname = "{name}"\n[brain]\nbackend = "{backend}"\n',
         encoding="utf-8",
     )
     return path
@@ -33,7 +35,7 @@ def write_config(tmp_path: Path, name: str = "Mariana", level: str = "L2") -> Pa
 def run_start(tmp_path: Path, *argv: str, **kw: Any) -> tuple[int, str, str]:
     out, err = io.StringIO(), io.StringIO()
     kw.setdefault("platform", "darwin")
-    kw.setdefault("keys", lambda: lambda: "sk-test")
+    kw.setdefault("keys", lambda provider: lambda: f"sk-{provider}")
     kw.setdefault("preflight", lambda stt: None)
     code = commands.run_start(parse("start", *argv), out=out, err=err, **kw)
     return code, out.getvalue(), err.getvalue()
@@ -69,7 +71,7 @@ def test_start_refuses_before_creating_anything(
     message: str,
 ) -> None:
     cfg = write_config(tmp_path, **config)
-    kw: dict[str, Any] = {"keys": (lambda: None)} if keys == "none" else {}
+    kw: dict[str, Any] = {"keys": (lambda provider: None)} if keys == "none" else {}
     try:
         code, _, err = run_start(tmp_path, "Daily", "--config", str(cfg), *argv, **kw)
     except SystemExit as e:  # argparse rejects L3 itself
@@ -136,7 +138,8 @@ def test_start_runs_the_meeting_then_prints_the_report(tmp_path: Path) -> None:
     (meeting,) = meetings(tmp_path)
     (plan,) = seen
     assert plan.meeting_dir == meeting and plan.level is AutonomyLevel.L1
-    assert plan.window == "Zoom" and plan.api_key() == "sk-test"
+    assert plan.window == "Zoom"
+    assert plan.api_key() == plan.agent_key() == "sk-anthropic"
     assert (meeting / "consent.json").is_file() and "Sombra" in notices[0]
     assert 'autonomy_level = "L1"' in (meeting / "meeting.toml").read_text()
     assert out.startswith(f"{meeting}\n")
@@ -151,12 +154,29 @@ def test_start_level_zero_runs_without_a_key(tmp_path: Path) -> None:
         "Gravação",
         "--config",
         str(cfg),
-        keys=lambda: None,
+        keys=lambda provider: None,
         confirm=lambda _: True,
         runner=lambda plan, args: seen.append(plan),
     )
-    assert code == 0 and "no minutes" in err
+    assert code == 0 and "no summaries or minutes" in err
     assert seen[0].api_key is None and seen[0].level is AutonomyLevel.L0
+
+
+def test_start_with_codex_needs_no_anthropic_key(tmp_path: Path) -> None:
+    cfg = write_config(tmp_path, backend="codex")
+    seen: list[Any] = []
+    keys = {"openai": lambda: "sk-openai"}
+    code, _, err = run_start(
+        tmp_path,
+        "Daily",
+        "--config",
+        str(cfg),
+        keys=keys.get,
+        confirm=lambda _: True,
+        runner=lambda plan, args: seen.append(plan),
+    )
+    assert code == 0 and "no summaries or minutes" in err
+    assert seen[0].api_key is None and seen[0].agent_key() == "sk-openai"
 
 
 # --- replay ----------------------------------------------------------------------------
@@ -189,7 +209,7 @@ def test_replay_rejects_bad_inputs(tmp_path: Path, argv: list[str], message: str
 
 
 def test_replay_needs_a_key_unless_the_brain_is_fake(tmp_path: Path) -> None:
-    code, _, err = run_replay(tmp_path, ME, OTHERS, keys=lambda: None)
+    code, _, err = run_replay(tmp_path, ME, OTHERS, keys=lambda provider: None)
     assert code == 2 and "--fake-brain" in err
 
 

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import dataclasses
 import json
 from datetime import datetime, timedelta
 from pathlib import Path
@@ -12,6 +13,7 @@ from test_orchestrator_replay import FIXTURE, fake_transcriber
 
 from sombra.brain.claude import ClaudeBrain
 from sombra.config import UserConfig, UserIdentity
+from sombra.config.schema import BrainConfig
 from sombra.contracts import (
     AutonomyLevel,
     BrainRequest,
@@ -41,8 +43,10 @@ from sombra.orchestrator.wiring import (
     PauseAdapter,
     SilentUI,
     SummaryHooks,
-    build_claude_brain,
+    agent_model,
+    build_agent_brain,
     build_detector,
+    key_provider,
     resolve_claude_model,
     resolve_whisper_model,
 )
@@ -85,19 +89,28 @@ def test_detector_needs_a_name_else_never_fires() -> None:
     assert none.feed(SpeechLine(T0, Channel.OTHERS, "Mariana, o que acha?")) is None
 
 
-def test_claude_brain_gets_the_config() -> None:
-    brain = build_claude_brain(
-        lambda: "k",
-        user_name="Mariana",
-        aliases=["Mari"],
-        allowed_topics=["vendas"],
-        level=AutonomyLevel.L1,
-        model="sonnet",
-    )
+def test_agent_brain_follows_the_backend() -> None:
+    from sombra.brain.codex import CodexBrain
+
+    kw = {"user_name": "Mariana", "aliases": ["Mari"], "allowed_topics": ["vendas"]}
+    brain = build_agent_brain("claude", lambda: "k", level=AutonomyLevel.L1, model="sonnet", **kw)
     assert isinstance(brain, ClaudeBrain)
     assert brain.settings.model == "claude-sonnet-5-5"
     assert brain.settings.level is AutonomyLevel.L1
     assert tuple(brain.settings.aliases) == ("Mari",)
+    codex = build_agent_brain("codex", None, level=AutonomyLevel.L2, model="sonnet", **kw)
+    assert isinstance(codex, CodexBrain)
+    with pytest.raises(ValueError, match="backend"):
+        build_agent_brain("gemini", None, level=AutonomyLevel.L2, model="x", **kw)
+
+
+def test_agent_model_and_key_per_backend() -> None:
+    assert agent_model("claude", "opus") == "claude-opus-5-5"
+    assert agent_model("codex", "sonnet") is None  # a Claude alias: Codex's own default
+    assert agent_model("codex", "claude-opus-5-5") is None
+    assert agent_model("codex", "gpt-5-codex") == "gpt-5-codex"
+    assert key_provider("claude") == "anthropic"
+    assert key_provider("codex") == "openai"
 
 
 def _event() -> TriggerEvent:
@@ -205,6 +218,7 @@ def _plan(tmp_path: Path, level: AutonomyLevel, key: bool = False) -> LivePlan:
         config=cfg,
         level=level,
         api_key=(lambda: "k") if key else None,
+        agent_key=(lambda: "k") if key else None,
     )
 
 
@@ -217,6 +231,10 @@ def test_live_brain_and_summary_follow_the_level_and_key(tmp_path: Path) -> None
     model = summary_model(keyed)
     assert isinstance(model, AnthropicTextModel) and model.name == "claude-haiku-4-5"
     assert summary_model(_plan(tmp_path, AutonomyLevel.L0)) is None
+    codex = _plan(tmp_path, AutonomyLevel.L2)
+    cfg = dataclasses.replace(codex.config, brain=BrainConfig("codex"))
+    codex = dataclasses.replace(codex, config=cfg)
+    assert type(build_brain(codex)).__name__ == "CodexBrain"  # `codex login` suffices
 
 
 async def test_run_live_records_until_stopped(tmp_path: Path) -> None:

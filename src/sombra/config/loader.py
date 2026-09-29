@@ -17,8 +17,10 @@ from pathlib import Path
 from typing import Any, cast
 
 from sombra.config.schema import (
+    BRAIN_BACKENDS,
     DEFAULT_MEETINGS_ROOT,
     AudioConfig,
+    BrainConfig,
     ConfigError,
     MeetingConfig,
     ModelsConfig,
@@ -138,6 +140,14 @@ class _Table:
         )
         return () if value is None else tuple(value)
 
+    def choice(self, key: str, default: str, allowed: tuple[str, ...]) -> str:
+        value = self.get_str(key, None)
+        if value is None:
+            return default
+        if value not in allowed:
+            raise self._err(key, f"must be one of {', '.join(allowed)}, got {value!r}")
+        return value
+
     def autonomy(self, key: str, default: AutonomyLevel) -> AutonomyLevel:
         value = self.get_str(key, None)
         if value is None:
@@ -193,6 +203,8 @@ def load_user_config(path: Path | None = None) -> UserConfig:
         agent=models_t.get_str("agent", d.models.agent) or d.models.agent,
         summary=models_t.get_str("summary", d.models.summary) or d.models.summary,
     )
+    brain_t = t.table("brain")
+    brain = BrainConfig(backend=brain_t.choice("backend", d.brain.backend, BRAIN_BACKENDS))
     cfg = UserConfig(
         meetings_root=Path(root or DEFAULT_MEETINGS_ROOT).expanduser(),
         autonomy_level=t.autonomy("autonomy_level", d.autonomy_level),
@@ -203,8 +215,9 @@ def load_user_config(path: Path | None = None) -> UserConfig:
         retention=retention,
         audio=audio,
         models=models,
+        brain=brain,
     )
-    for sub in (user_t, ret_t, audio_t, models_t, t):
+    for sub in (user_t, ret_t, audio_t, models_t, brain_t, t):
         sub.done()
     return cfg
 

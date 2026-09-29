@@ -17,6 +17,7 @@ from sombra.config.loader import (
 )
 from sombra.config.schema import (
     AudioConfig,
+    BrainConfig,
     ConfigError,
     MeetingConfig,
     ModelsConfig,
@@ -28,6 +29,7 @@ from sombra.config.schema import (
 
 __all__ = [
     "AudioConfig",
+    "BrainConfig",
     "ConfigError",
     "MeetingConfig",
     "ModelsConfig",

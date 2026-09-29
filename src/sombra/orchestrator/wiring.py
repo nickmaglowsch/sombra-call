@@ -22,7 +22,7 @@ from dataclasses import dataclass, field
 from datetime import datetime
 from pathlib import Path
 
-from sombra.brain.claude import AnthropicClient, ClaudeBrain, ClaudeSettings
+from sombra.brain.backend import create_brain
 from sombra.contracts import (
     ApprovalUI,
     AudioSource,
@@ -42,6 +42,7 @@ from sombra.contracts import (
     TriggerEvent,
     UserAction,
 )
+from sombra.orchestrator.ask import MODEL_ALIASES, resolve_model
 from sombra.orchestrator.hooks import BlockedApp, EpochSummary, never_blocked
 from sombra.orchestrator.session import Clock, Session, local_now
 from sombra.orchestrator.settings import SessionSettings
@@ -65,12 +66,7 @@ log = logging.getLogger(__name__)
 
 ANTHROPIC = "anthropic"  # keychain provider name for the Claude key (`sombra auth set anthropic`)
 
-# `models.agent` / `models.summary` in config.toml hold short aliases (docs/config.md).
-CLAUDE_MODEL_ALIASES = {
-    "opus": "claude-opus-5-5",
-    "sonnet": "claude-sonnet-5-5",
-    "haiku": "claude-haiku-4-5",
-}
+OPENAI = "openai"  # keychain provider for the Codex backend (optional: `codex login` works too)
 
 
 # --- config translation ----------------------------------------------------------------
@@ -94,7 +90,21 @@ def resolve_whisper_model(name: str) -> str:
 
 def resolve_claude_model(name: str) -> str:
     """``models.agent`` / ``models.summary`` alias (``sonnet``) -> an API model id."""
-    return CLAUDE_MODEL_ALIASES.get(name.strip().lower(), name.strip())
+    return resolve_model(name)
+
+
+def agent_model(backend: str, name: str) -> str | None:
+    """The model to pass the backend: a Claude alias means nothing to Codex (its default)."""
+    if backend == "claude":
+        return resolve_model(name)
+    if name.strip().casefold() in MODEL_ALIASES or name.strip().startswith("claude-"):
+        return None
+    return name.strip() or None
+
+
+def key_provider(backend: str) -> str:
+    """Keychain provider holding the key of ``brain.backend``."""
+    return OPENAI if backend == "codex" else ANTHROPIC
 
 
 # --- hooks -----------------------------------------------------------------------------
@@ -282,23 +292,26 @@ def build_detector(name: str, aliases: Sequence[str]) -> TriggerDetector:
     return NameTriggerDetector(names[0], names[1:])
 
 
-def build_claude_brain(
-    api_key: Callable[[], str],
+def build_agent_brain(
+    backend: str,
+    api_key: Callable[[], str] | None,
     *,
     user_name: str,
     aliases: Sequence[str],
     allowed_topics: Sequence[str],
     level: AutonomyLevel,
     model: str,
-) -> ClaudeBrain:
-    settings = ClaudeSettings(
+) -> Brain:
+    """``brain.backend`` (``claude`` | ``codex``) through ``brain.backend.create_brain`` (C5)."""
+    return create_brain(
+        backend,
         user_name=user_name,
         aliases=tuple(aliases),
         allowed_topics=tuple(allowed_topics),
         level=level,
-        model=resolve_claude_model(model),
+        model=agent_model(backend, model),
+        api_key=api_key,
     )
-    return ClaudeBrain(settings, AnthropicClient(api_key))
 
 
 @dataclass

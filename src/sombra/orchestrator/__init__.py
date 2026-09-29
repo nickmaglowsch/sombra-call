@@ -4,6 +4,9 @@ Owns the event loop, the capture pipelines, autonomy levels L0/L1/L2, failure
 handling (an agent failure never stops recording), latency timestamps and the
 summary-epoch schedule (C4). PRD: "Fluxo do gatilho", "Confiabilidade".
 
+``ask`` answers questions about a recorded meeting (``sombra ask``, PRD use case
+"Depois da reunião"); it wires ``brain``, ``store`` and ``config``.
+
 This package is the only one allowed to import concrete modules. ``session`` and
 ``hooks`` depend on ``sombra.contracts`` alone and are tested against the fakes in
 ``tests/fakes/``; ``wiring``, ``live`` and ``replay`` build the real modules for

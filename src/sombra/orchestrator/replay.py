@@ -45,7 +45,7 @@ from sombra.orchestrator.wiring import (
     Assembly,
     NoBrain,
     SilentUI,
-    build_claude_brain,
+    build_agent_brain,
     build_detector,
     build_session,
     build_transcriber,
@@ -205,6 +205,7 @@ class ReplayOptions:
     n_threads: int = 4
     use_gpu: bool = True
     agent_model: str = "sonnet"
+    backend: str = "claude"  # brain.backend: claude | codex
 
 
 def media_clock(start: datetime, speed: float) -> Clock:
@@ -224,8 +225,8 @@ async def run_replay(
 ) -> Path:
     """Replay the files into a new meeting folder under ``opts.meetings_root``; return it.
 
-    ``brain`` / ``ui`` default to the real Claude backend (``api_key`` required) and
-    ``ui`` must then be given by the caller (the overlay needs a window). Without
+    ``brain`` defaults to ``opts.backend`` with ``api_key`` (required for Claude);
+    ``ui`` is required (the overlay, or AutoApproveUI). Without
     ``summary_model`` no epoch summaries or minutes are written.
     """
     level = opts.level
@@ -235,9 +236,10 @@ async def run_replay(
     if level is AutonomyLevel.L0:
         brain, ui = NoBrain(), SilentUI()
     if brain is None:
-        if api_key is None:
+        if opts.backend == "claude" and api_key is None:
             raise ValueError("the Claude brain needs an API key (or use a scripted brain)")
-        brain = build_claude_brain(
+        brain = build_agent_brain(
+            opts.backend,
             api_key,
             user_name=opts.user_name,
             aliases=opts.aliases,

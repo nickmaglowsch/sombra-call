@@ -34,7 +34,7 @@ from sombra.orchestrator.wiring import (
     ANTHROPIC,
     NoBrain,
     SilentUI,
-    build_claude_brain,
+    build_agent_brain,
     build_detector,
     build_session,
     build_transcriber,
@@ -57,7 +57,8 @@ class LivePlan:
     level: AutonomyLevel
     allowed_topics: Sequence[str] = ()
     window: str | None = None  # window-only capture: a title substring (S4)
-    api_key: Callable[[], str] | None = None
+    api_key: Callable[[], str] | None = None  # Anthropic: summaries, minutes, Claude
+    agent_key: Callable[[], str] | None = None  # the key of `brain.backend`
     blocked: BlockedApps = field(default_factory=BlockedApps)
 
 
@@ -123,11 +124,13 @@ def summary_model(plan: LivePlan) -> TextModel | None:
 def build_brain(plan: LivePlan) -> Brain:
     if plan.level is AutonomyLevel.L0:
         return NoBrain()
-    if plan.api_key is None:
+    backend = plan.config.brain.backend
+    if backend == "claude" and plan.agent_key is None:
         raise ValueError(f"{plan.level} needs an API key: run `sombra auth set {ANTHROPIC}`")
     user = plan.config.user
-    return build_claude_brain(
-        plan.api_key,
+    return build_agent_brain(
+        backend,
+        plan.agent_key,
         user_name=user.name,
         aliases=user.aliases,
         allowed_topics=plan.allowed_topics,

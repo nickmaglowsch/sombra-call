@@ -57,6 +57,9 @@ TEXT_SUFFIXES = frozenset(
     {".md", ".txt", ".csv", ".tsv", ".json", ".yaml", ".yml", ".toml", ".rst", ".org"}
 )
 
+ASK_NOT_FOUND = "Isso não está na transcrição."
+"""How a post-meeting answer starts when the meeting records do not hold the answer."""
+
 FRAME_REQUEST_PREFIX = "PRECISO_DA_TELA"
 """The model answers ``PRECISO_DA_TELA f0123`` to ask for a frame (see the system prompt)."""
 
@@ -111,8 +114,17 @@ def _one_line(value: str) -> str:
 # --- system prompt ----------------------------------------------------------------------
 
 
-def _template() -> str:
-    return resources.files("sombra.brain").joinpath("system_prompt_pt.md").read_text("utf-8")
+def _template(name: str = "system_prompt_pt.md") -> str:
+    return resources.files("sombra.brain").joinpath(name).read_text("utf-8")
+
+
+def _aliases_clause(name: str, aliases: Sequence[str]) -> str:
+    alias_list: list[str] = []
+    for alias in (_one_line(a) for a in aliases):
+        seen = {name.casefold(), *(a.casefold() for a in alias_list)}
+        if alias and alias.casefold() not in seen:
+            alias_list.append(alias)
+    return f" (também chamado de {', '.join(alias_list)})" if alias_list else ""
 
 
 def system_prompt(
@@ -123,11 +135,6 @@ def system_prompt(
 ) -> str:
     """Render the PT-BR system prompt (C3). Deterministic: same inputs, same bytes."""
     name = _one_line(user_name)
-    alias_list: list[str] = []
-    for alias in (_one_line(a) for a in aliases):
-        seen = {name.casefold(), *(a.casefold() for a in alias_list)}
-        if alias and alias.casefold() not in seen:
-            alias_list.append(alias)
     topics = [_one_line(t) for t in allowed_topics if _one_line(t)]
     if topics:
         topics_rule = "Responda apenas sobre estes temas:\n" + "\n".join(f"- {t}" for t in topics)
@@ -141,9 +148,50 @@ def system_prompt(
         Template(_template())
         .substitute(
             user_name=name,
-            aliases_clause=f" (também chamado de {', '.join(alias_list)})" if alias_list else "",
+            aliases_clause=_aliases_clause(name, aliases),
             topics_rule=topics_rule,
             level_rule=level_rule,
+        )
+        .rstrip("\n")
+    )
+
+
+_ASK_FRAMES_RULE = {
+    True: (
+        "Se a resposta depender do que estava na tela, veja a imagem com a ferramenta "
+        "view_frame (ou leia frames/fNNNN.jpg) e cite o id da tela junto do horário."
+    ),
+    False: (
+        "As imagens das telas não estão disponíveis nesta pergunta; use só o título da "
+        "janela nas linhas TELA. Se a resposta depender do conteúdo de uma tela, diga isso "
+        "e sugira repetir a pergunta com --frames."
+    ),
+}
+
+
+def post_meeting_system_prompt(
+    user_name: str,
+    aliases: Sequence[str],
+    allowed_topics: Sequence[str] = (),
+    level: AutonomyLevel | None = None,
+    *,
+    frames: bool = False,
+) -> str:
+    """The PT-BR system prompt for questions after the meeting (``sombra ask``).
+
+    Same argument order as :func:`system_prompt` so it drops into a ``PromptKit``.
+    ``allowed_topics`` and ``level`` shape what Sombra *says in* a meeting and do not
+    apply when the user asks about their own meeting afterwards; they are ignored.
+    ``frames`` says whether the agent may look at screenshots.
+    """
+    name = _one_line(user_name)
+    return (
+        Template(_template("system_prompt_ask_pt.md"))
+        .substitute(
+            user_name=name,
+            aliases_clause=_aliases_clause(name, aliases),
+            not_found=ASK_NOT_FOUND,
+            frames_rule=_ASK_FRAMES_RULE[frames],
         )
         .rstrip("\n")
     )
@@ -307,6 +355,31 @@ def build_tail(trigger: TriggerEvent, frame_paths: Sequence[Path]) -> list[dict[
             f'"{escape_data(_one_line(trigger.matched_alias), quote=True)}"):\n'
             + wrap_data("pergunta", trigger.question)
             + "\nEscreva a resposta que será dita, seguindo as regras do sistema."
+        )
+    )
+    return tail
+
+
+def build_ask_tail(
+    trigger: TriggerEvent, frame_paths: Sequence[Path] = (), *, summary_md: str | None = None
+) -> list[dict[str, Any]]:
+    """The tail for a post-meeting question: ``summary.md`` (if any) and the question.
+
+    Same shape as :func:`build_tail` so it drops into a ``PromptKit``. No frames are
+    attached up front: with ``--frames`` the agent fetches the ones it needs by id.
+    """
+    if frame_paths:
+        raise ValueError("post-meeting questions attach no frames up front")
+    tail: list[dict[str, Any]] = []
+    if summary_md and summary_md.strip():
+        tail.append(
+            _text_block("Resumo da reunião (summary.md):\n" + wrap_data("resumo", summary_md))
+        )
+    tail.append(
+        _text_block(
+            "Pergunta sobre a reunião:\n"
+            + wrap_data("pergunta", trigger.question)
+            + "\nResponda seguindo as regras do sistema, citando os horários [HH:MM:SS]."
         )
     )
     return tail
