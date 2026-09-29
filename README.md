@@ -80,6 +80,7 @@ make setup   # uv sync
 make check   # lint + format check + mypy --strict + tests with coverage (what CI runs)
 make fmt     # auto-fix lint and formatting
 uv run sombra --version
+uv run sombra minutes <meeting>   # (re)generate the minutes; see docs/summary.md
 ```
 
 Configuration (user config, profiles, `sombra new`, `sombra profiles list`) is documented in [`docs/config.md`](docs/config.md).
