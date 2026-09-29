@@ -117,6 +117,15 @@ async def test_other_user_rejected(sock_dir: Path, monkeypatch: pytest.MonkeyPat
     assert not c.is_paused
 
 
+async def test_unknown_peer_rejected(sock_dir: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    path = sock_dir / "c.sock"
+    c = PauseController()
+    monkeypatch.setattr(control, "peer_uid", lambda sock: None)
+    async with ControlServer(c, path):
+        assert await ask("pause", path) == "error forbidden"
+    assert not c.is_paused
+
+
 def test_peer_uid_is_current_user() -> None:
     a, b = socket.socketpair(socket.AF_UNIX)
     with a, b:

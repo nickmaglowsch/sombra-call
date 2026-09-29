@@ -9,12 +9,14 @@ from __future__ import annotations
 
 import getpass
 import json
+import os
 from collections.abc import Callable
 from dataclasses import asdict, dataclass
 from datetime import UTC, datetime
 from pathlib import Path
 
 CONSENT_FILE = "consent.json"
+_O_NOFOLLOW = getattr(os, "O_NOFOLLOW", 0)
 
 DEFAULT_NOTICE_PT_BR = (
     "Aviso: esta reunião está sendo gravada e transcrita pelo Sombra, um assistente "
@@ -109,6 +111,9 @@ def require_consent(
     if path.is_symlink():
         raise ConsentRefusedError(f"refusing to write through a symlink: {path}")
     tmp = path.with_name(CONSENT_FILE + ".tmp")
-    tmp.write_text(record.to_json() + "\n", encoding="utf-8")
+    tmp.unlink(missing_ok=True)  # a leftover (or a planted symlink) is removed, never followed
+    fd = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_EXCL | _O_NOFOLLOW, 0o600)
+    with os.fdopen(fd, "w", encoding="utf-8") as f:
+        f.write(record.to_json() + "\n")
     tmp.replace(path)
     return record

@@ -8,6 +8,7 @@ async-friendly: subscribers are called synchronously on every state change, and
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import logging
 import threading
 from collections.abc import Callable
@@ -20,6 +21,9 @@ Subscriber = Callable[[bool], None]  # receives the new is_paused value
 class PauseController:
     def __init__(self, paused: bool = False) -> None:
         self._lock = threading.Lock()
+        # Held across set + notify so subscribers see changes in the order they happened.
+        # Re-entrant so a subscriber may itself call pause()/resume().
+        self._notify_lock = threading.RLock()
         self._paused = paused
         self._subscribers: list[Subscriber] = []
         self._waiters: list[tuple[asyncio.AbstractEventLoop, asyncio.Future[None]]] = []
@@ -60,32 +64,41 @@ class PauseController:
             if not self._paused:
                 return
             fut: asyncio.Future[None] = loop.create_future()
-            self._waiters.append((loop, fut))
-        await fut
+            waiter = (loop, fut)
+            self._waiters.append(waiter)
+        try:
+            await fut
+        finally:
+            with self._lock:
+                if waiter in self._waiters:
+                    self._waiters.remove(waiter)
 
     def _set(self, target: bool | None) -> tuple[bool, bool]:
         """Set the state (``None`` flips it) under one lock, then notify outside it.
 
         Returns ``(changed, is_paused)``.
         """
-        with self._lock:
-            paused = (not self._paused) if target is None else target
-            if self._paused == paused:
-                return False, paused
-            self._paused = paused
-            subscribers = list(self._subscribers)
-            waiters: list[tuple[asyncio.AbstractEventLoop, asyncio.Future[None]]] = []
-            if not paused:
-                waiters, self._waiters = self._waiters, []
-        for loop, fut in waiters:
-            loop.call_soon_threadsafe(_resolve, fut)
-        for callback in subscribers:
-            try:
-                callback(paused)
-            except Exception:
-                # One broken subscriber must not keep the others (e.g. capture) running.
-                log.exception("pause subscriber failed")
-        return True, paused
+        with self._notify_lock:
+            with self._lock:
+                paused = (not self._paused) if target is None else target
+                if self._paused == paused:
+                    return False, paused
+                self._paused = paused
+                subscribers = list(self._subscribers)
+                waiters: list[tuple[asyncio.AbstractEventLoop, asyncio.Future[None]]] = []
+                if not paused:
+                    waiters, self._waiters = self._waiters, []
+            for loop, fut in waiters:
+                # A waiter's loop may have closed since; that must not break resume().
+                with contextlib.suppress(RuntimeError):
+                    loop.call_soon_threadsafe(_resolve, fut)
+            for callback in subscribers:
+                try:
+                    callback(paused)
+                except Exception:
+                    # One broken subscriber must not keep the others (e.g. capture) running.
+                    log.exception("pause subscriber failed")
+            return True, paused
 
 
 def _resolve(fut: asyncio.Future[None]) -> None:

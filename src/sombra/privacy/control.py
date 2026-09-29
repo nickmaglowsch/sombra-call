@@ -142,8 +142,8 @@ class ControlServer:
                 return
             sock = writer.get_extra_info("socket")
             uid = peer_uid(sock) if sock is not None else None
-            if uid is not None and uid != os.getuid():
-                log.warning("control socket: rejected connection from uid %d", uid)
+            if uid != os.getuid():  # fail closed: an unknown peer is refused too
+                log.warning("control socket: rejected connection from uid %s", uid)
                 reply = "error forbidden"
             else:
                 reply = self.handle_command(line[:_MAX_LINE].decode("ascii", "replace").strip())

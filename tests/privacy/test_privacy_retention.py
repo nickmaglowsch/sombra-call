@@ -216,3 +216,12 @@ def test_resolve_refuses_outside_root_and_symlinks(root: Path, tmp_path: Path) -
     with pytest.raises(UnsafePathError):
         delete_meeting(root, "link", confirmed=True)
     assert (other / "x" / "transcript.md").exists()
+
+
+def test_unexpected_subfolder_in_frames_keeps_meeting(root: Path) -> None:
+    m = make_meeting(root, "m", [60], text_age=40)
+    touch(m / "frames" / "sub" / "keep.jpg", 1)
+    sweep(root, NOW)
+    assert m.exists()
+    assert (m / "frames" / "sub" / "keep.jpg").exists()
+    assert not (m / "transcript.md").exists()

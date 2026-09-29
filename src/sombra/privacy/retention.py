@@ -132,7 +132,8 @@ def _sweep_meeting(
             if st is None:
                 if entry.is_symlink():
                     report.skipped.append(entry)
-                    remaining += 1
+                if entry.exists() or entry.is_symlink():
+                    remaining += 1  # symlinks and unexpected subfolders keep the meeting
                 continue
             days = policy.text_days if entry.name == FRAME_INDEX else policy.frames_days
             if _expired(st, now, days):

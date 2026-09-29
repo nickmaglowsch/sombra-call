@@ -103,3 +103,14 @@ def test_stdin_confirm_eof_is_refusal(monkeypatch: pytest.MonkeyPatch) -> None:
 
     monkeypatch.setattr("builtins.input", eof)
     assert consent_mod._stdin_confirm("AVISO") is False
+
+
+def test_planted_tmp_symlink_is_not_followed(tmp_path: Path) -> None:
+    outside = tmp_path / "outside.txt"
+    outside.write_text("original", encoding="utf-8")
+    meeting = tmp_path / "m"
+    meeting.mkdir()
+    (meeting / (CONSENT_FILE + ".tmp")).symlink_to(outside)
+    rec = require_consent(meeting, confirm=lambda n: True, now=lambda: NOW, user="u")
+    assert outside.read_text(encoding="utf-8") == "original"
+    assert load_consent(meeting) == rec

@@ -1,4 +1,5 @@
 import asyncio
+import itertools
 import threading
 
 import pytest
@@ -101,3 +102,46 @@ def test_concurrent_toggles_are_consistent() -> None:
         t.join()
     assert len(seen) == 50  # every toggle is a real change
     assert c.is_paused is False  # even number of toggles
+
+
+def test_waiter_from_closed_loop_does_not_break_resume() -> None:
+    c = PauseController(paused=True)
+    seen: list[bool] = []
+    c.subscribe(seen.append)
+
+    async def leave_waiter() -> None:
+        asyncio.get_running_loop().create_task(c.wait_resumed())
+        await asyncio.sleep(0)
+
+    asyncio.run(leave_waiter())  # the loop closes with the waiter still pending
+    assert c.resume() is True
+    assert seen == [False]
+
+
+def test_subscriber_may_change_state_reentrantly() -> None:
+    c = PauseController()
+    seen: list[bool] = []
+
+    def resume_right_away(paused: bool) -> None:
+        seen.append(paused)
+        if paused:
+            c.resume()
+
+    c.subscribe(resume_right_away)
+    c.pause()
+    assert seen == [True, False]
+    assert not c.is_paused
+
+
+def test_notifications_arrive_in_state_order_across_threads() -> None:
+    c = PauseController()
+    seen: list[bool] = []
+    c.subscribe(seen.append)
+    threads = [threading.Thread(target=c.pause if i % 2 else c.resume) for i in range(200)]
+    for t in threads:
+        t.start()
+    for t in threads:
+        t.join()
+    if seen:
+        assert seen[-1] == c.is_paused
+    assert all(a != b for a, b in itertools.pairwise(seen))
