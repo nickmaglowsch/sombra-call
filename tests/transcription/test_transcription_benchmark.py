@@ -10,6 +10,8 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import resource
+import sys
 import statistics
 from collections.abc import AsyncIterator
 from datetime import datetime, timedelta
@@ -78,9 +80,11 @@ async def test_end_of_speech_to_line_p50_under_one_second() -> None:
     stt = sorted(s.stt_s for s in stats if s.text)
     p50 = statistics.median(lat)
     p95 = lat[min(len(lat) - 1, int(0.95 * len(lat)))]
+    peak = resource.getrusage(resource.RUSAGE_SELF).ru_maxrss  # bytes on macOS, KiB on Linux
+    peak_mb = peak / 1e6 if sys.platform == "darwin" else peak / 1e3
     summary = (
         f"n={len(lat)} end-of-speech->line p50={p50:.3f}s p95={p95:.3f}s "
-        f"(whisper only p50={statistics.median(stt):.3f}s)"
+        f"(whisper only p50={statistics.median(stt):.3f}s), peak RSS {peak_mb:.0f} MB"
     )
     log.warning(summary)
     assert p50 <= 1.0, summary
