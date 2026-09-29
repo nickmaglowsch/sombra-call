@@ -104,6 +104,8 @@ jobs:
             sha256sum -c --ignore-missing SHA256SUMS
           fi
       - uses: astral-sh/setup-uv@v6
+        with:
+          enable-cache: false # a clean runner, as a first-time user has
       - name: Install
         run: |
           wheel=$(ls dist/sombra-*.whl)
