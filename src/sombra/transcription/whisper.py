@@ -3,11 +3,14 @@
 One ``PyWhisperCppEngine`` holds one whisper context; it is not safe to share between
 threads, so the transcriber builds one per channel. ``whisper_full`` releases the GIL,
 so two engines really run in parallel (Metal on Apple Silicon, CPU elsewhere).
+
+Loading is the exception: see ``_MODEL_LOAD``.
 """
 
 from __future__ import annotations
 
 import logging
+import threading
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Protocol
@@ -15,6 +18,13 @@ from typing import Any, Protocol
 from sombra.transcription.vad import Pcm
 
 log = logging.getLogger(__name__)
+
+# pywhispercpp loads a model inside ``utils.redirect_stderr``, which ``dup``s and ``dup2``s
+# the process-wide fd 2 to silence whisper.cpp. The transcriber builds one engine per
+# channel on two threads at once; two overlapping redirects restore each other's saved fd
+# and leave fd 2 closed or pointing at the wrong file (EBADF, #48). Loads take this lock.
+# ``transcribe`` does not redirect, so inference still runs in parallel.
+_MODEL_LOAD = threading.Lock()
 
 
 class SpeechToText(Protocol):
@@ -55,12 +65,13 @@ class PyWhisperCppEngine:
         }
         if settings.initial_prompt:
             params["initial_prompt"] = settings.initial_prompt
-        self._model = model_cls(
-            str(settings.model_path),
-            redirect_whispercpp_logs_to=None,
-            context_params={"use_gpu": settings.use_gpu},
-            **params,
-        )
+        with _MODEL_LOAD:
+            self._model = model_cls(
+                str(settings.model_path),
+                redirect_whispercpp_logs_to=None,
+                context_params={"use_gpu": settings.use_gpu},
+                **params,
+            )
 
     def transcribe(self, audio: Pcm) -> str:
         segments = self._model.transcribe(audio)

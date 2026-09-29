@@ -2,6 +2,9 @@
 
 from __future__ import annotations
 
+import os
+import threading
+import time
 from pathlib import Path
 from typing import Any, ClassVar
 
@@ -62,6 +65,56 @@ def test_whisper_engine_without_prompt_omits_it(tmp_path: Path) -> None:
 def test_whisper_engine_requires_the_model_file(tmp_path: Path) -> None:
     with pytest.raises(FileNotFoundError, match="download_models"):
         PyWhisperCppEngine(WhisperSettings(tmp_path / "missing.bin"), model_cls=FakeModel)
+
+
+class StderrRedirectingModel:
+    """Loads the way pywhispercpp does: silences whisper.cpp by swapping the process's fd 2."""
+
+    guard = threading.Lock()
+    active = 0
+    peak = 0
+
+    def __init__(self, path: str, **kwargs: Any) -> None:
+        cls = StderrRedirectingModel
+        with cls.guard:
+            cls.active += 1
+            cls.peak = max(cls.peak, cls.active)
+        # pywhispercpp.utils.redirect_stderr(to=None), with a slow load in the middle
+        with Path(os.devnull).open("w") as devnull:
+            saved_fd = os.dup(2)
+            os.dup2(devnull.fileno(), 2)
+            try:
+                time.sleep(0.05)
+            finally:
+                os.dup2(saved_fd, 2)
+                os.close(saved_fd)
+        with cls.guard:
+            cls.active -= 1
+
+
+def test_concurrent_engine_loads_leave_stderr_intact(tmp_path: Path) -> None:
+    """#48: the transcriber loads one engine per channel on two threads at once."""
+    model = tmp_path / "m.bin"
+    model.write_bytes(b"x")
+    before = os.fstat(2)
+    errors: list[BaseException] = []
+
+    def load() -> None:
+        try:
+            PyWhisperCppEngine(WhisperSettings(model), model_cls=StderrRedirectingModel)
+        except BaseException as exc:  # surfaced below; a thread would swallow it
+            errors.append(exc)
+
+    threads = [threading.Thread(target=load) for _ in range(4)]
+    for t in threads:
+        t.start()
+    for t in threads:
+        t.join()
+
+    assert errors == []
+    assert StderrRedirectingModel.peak == 1
+    after = os.fstat(2)  # raises EBADF if a racing restore closed it
+    assert (after.st_dev, after.st_ino) == (before.st_dev, before.st_ino)
 
 
 def test_real_binding_imports() -> None:
