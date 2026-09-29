@@ -114,6 +114,22 @@ Found while doing this, out of #57's scope:
 - **Linux, npm install under `/opt`.** Every shell command failed with `bwrap: execvp …/codex-linux-x64/…/bin/codex: No such file or directory`. The sandbox helper lives outside the `:minimal` read roots. This fails closed, but it means the agent can't read the meeting folder. Needs a follow-up issue with a real `CODEX_HOME` (the capture used a temp one, where Codex refuses to create its helper aliases).
 - **The developer message lists Codex's bundled system skills** (`imagegen`, `openai-docs`, …, under `$CODEX_HOME/skills/.system`). No tool is attached to them, and the sandbox can't read that folder. They cost prompt tokens.
 
+## Containment and residual risk (#57)
+
+What actually stops an agent driven by untrusted meeting text, strongest first:
+
+1. **The tools aren't offered.** Decision 7's catalog and flags leave only `exec_command` + `write_stdin` in the request (capture above; `test_brain_codex_capture.py`). A forced call to a removed tool gets `unsupported … call` and runs nothing.
+2. **The permission profile.** Reads are limited to the meeting folder plus `:minimal`, nothing is writable, and there is no network. Every shell command runs under it. On #55 the reviewer also saw it refuse `apply_patch` writes to the cwd and to `$HOME` made from inside code-mode `exec`.
+3. **The code-mode isolate has no file or network access.** This was observed on #55 before its tools were removed: `require`, `process`, `fetch` and `Deno` were undefined, and `import("fs")` was refused. It matters only if a future CLI brings `exec` back past layer 1.
+4. **`--ephemeral`.** It is required for C6. On 0.159.1 it is also why a forced `spawn_agent` failed: the child finds no rollout. `test_ephemeral_is_always_passed` pins it.
+5. **The JSONL allowlist.** This is a tripwire, not the enforcement. It voids the answer on any event or item it doesn't know, but it sees only what Codex reports. Code-mode `exec` and `spawn_agent` calls report nothing (fact 5).
+
+Residual risk:
+
+- **A newer CLI can offer a new tool.** It could come from a catalog field or feature we don't clear, or from one that emits no item, so layers 1 and 5 would both miss it. Layers 2 to 4 still hold. Mitigation: rerun the capture test before raising `MIN_CLI_VERSION` (see Consequences).
+- **The accepted shell remains.** The agent can run read-only commands in the meeting folder and read the world-readable `:minimal` roots (`/etc`, `/usr`). That was already accepted in #18.
+- **A ChatGPT login isn't verified yet.** The remote catalog refresh might override `model_catalog_json`; the live check is in the table below.
+
 ## Left for a human
 
 Needs the Codex CLI (`npm i -g @openai/codex` or the release binary) and an OpenAI key or `codex login`:

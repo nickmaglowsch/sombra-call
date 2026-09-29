@@ -25,8 +25,10 @@ Every answer is one ``codex exec --json`` process:
   cleared (:func:`confine_catalog`) and every run loads it with
   ``model_catalog_json``, so the request offers only ``exec_command`` and
   ``write_stdin``.
-* **Fail closed on output.** Any JSONL event or item type outside
-  :data:`ALLOWED_EVENTS` / :data:`ALLOWED_ITEMS` voids the answer.
+* **Output tripwire.** Any JSONL event or item type outside
+  :data:`ALLOWED_EVENTS` / :data:`ALLOWED_ITEMS` voids the answer. It is not the
+  enforcement: on 0.159.1 a code-mode ``exec`` or ``spawn_agent`` call emits no item
+  at all, which is why those tools are removed from the request instead.
 * **No history.** ``--ephemeral`` writes no session file and every answer is a new
   process, so a frame reaches exactly one request (C6) and is never persisted
   outside ``frames/``.
@@ -92,7 +94,9 @@ PASSTHROUGH_ENV = ("PATH", "HOME", "USER", "LOGNAME", "LANG", "LC_ALL", "TMPDIR"
 # JSONL event and item types proven inert (ADR 0018). Anything else, including a type a
 # newer CLI adds, voids the answer: ``file_change``, ``web_search``, ``mcp_tool_call``,
 # ``collab_tool_call``, ``todo_list`` and every unknown item fail closed. ``error`` items
-# are warnings (e.g. unknown model metadata) and carry only a message.
+# are warnings (e.g. unknown model metadata) and carry only a message. This is a
+# tripwire for what Codex reports; calls it doesn't report (code-mode ``exec``,
+# ``spawn_agent`` on 0.159.1) are stopped by removing the tools (CATALOG_OVERRIDES).
 ALLOWED_EVENTS = frozenset(
     {
         "thread.started",
@@ -259,6 +263,8 @@ def sandbox_args(meeting_dir: Path, model_catalog: Path) -> list[str]:
     folder = toml_str(str(meeting_dir))
     p = PERMISSION_PROFILE
     return [
+        # Never drop: no session file (C6), and on 0.159.1 it is also why a
+        # ``spawn_agent`` call fails (the child finds no rollout). Pinned by a test.
         "--ephemeral",
         "--skip-git-repo-check",
         "--ignore-user-config",

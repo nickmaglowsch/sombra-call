@@ -332,6 +332,19 @@ async def test_sandbox_flags_on_every_run(meeting: Path, kw: dict[str, Any]) -> 
     ]
 
 
+def test_ephemeral_is_always_passed(tmp_path: Path) -> None:
+    """``--ephemeral`` must never be dropped (ADR 0018, containment layer 4).
+
+    It keeps images out of history (C6), and on 0.159.1 it is also what made a forced
+    ``spawn_agent`` call fail when that tool was still offered.
+    """
+    for kw in ({}, {"model": "m"}, {"reasoning_effort": None}):
+        argv = build_argv(settings(**kw), tmp_path, "x", [], tmp_path / "m.json")
+        assert argv.count("--ephemeral") == 1
+        assert argv.index("--ephemeral") < argv.index("-c")  # an exec option, before config
+    assert "--ephemeral" in sandbox_args(tmp_path, tmp_path / "m.json")
+
+
 def test_sandbox_args_quote_any_folder_name(tmp_path: Path) -> None:
     for name in ['a"b', "c\\d", "nova\nlinha", "ação ✓", "x]y={z}"]:
         folder = tmp_path / name
