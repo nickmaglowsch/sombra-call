@@ -11,8 +11,8 @@ from __future__ import annotations
 import asyncio
 import logging
 import resource
-import sys
 import statistics
+import sys
 from collections.abc import AsyncIterator
 from datetime import datetime, timedelta
 
