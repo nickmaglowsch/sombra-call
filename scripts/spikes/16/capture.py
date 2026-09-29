@@ -24,6 +24,7 @@ Wayland session.
 from __future__ import annotations
 
 import argparse
+import os
 import signal
 import sys
 import time
@@ -103,6 +104,7 @@ class Grabber:
 
     def stop(self) -> None:
         self.pipeline.set_state(Gst.State.NULL)
+        self.pipeline.get_bus().remove_signal_watch()
 
 
 def pipewire_source(fd: int, node_id: int, keepalive_ms: int) -> str:
@@ -313,6 +315,7 @@ class Run:
         return time.monotonic() < self.deadline
 
     def tick_per_capture(self) -> bool:
+        fd = -1
         try:
             if self.args.dry_run:
                 fd_source, open_s = TEST_SOURCE, 0.0
@@ -338,6 +341,8 @@ class Run:
             self.loop.quit()
             return False
         finally:
+            if fd >= 0:  # pipewiresrc dups the fd; ours would leak once per capture
+                os.close(fd)
             self.close_screencast()
         return time.monotonic() < self.deadline
 

@@ -56,7 +56,7 @@ class Trial:
         self.action: str | None = None
         self.action_s: float | None = None
         self.token: str | None = None
-        self.parameter: Any = None
+        self.reply: str | None = None
         self.closed: str | None = None
 
 
@@ -217,7 +217,8 @@ class Run:
         trial = self.trial
         if trial is None or notification_id != trial.notification_id:
             return
-        trial.parameter = parameter
+        token, trial.reply = parse_portal_parameter(parameter)
+        trial.token = trial.token or token
         self._action(trial, action)
 
     def _action(self, trial: Trial, action: str) -> None:
@@ -253,7 +254,6 @@ class Run:
         edit: dict[str, Any] = {}
         if trial.action in ("edit", "default") and not self.args.no_window:
             edit = edit_window(trial.token, self.args.timeout)
-        reply = trial.parameter[2] if isinstance(trial.parameter, list | tuple) else None
         self.log.event(
             "trial",
             n=trial.n,
@@ -263,10 +263,31 @@ class Run:
             action_s=round(trial.action_s, 3) if trial.action_s is not None else None,
             activation_token=trial.token is not None,
             closed=trial.closed,
-            inline_reply=reply,
+            inline_reply=trial.reply,
             **edit,
         )
         self.trial = None
+
+
+def parse_portal_parameter(parameter: Any) -> tuple[str | None, str | None]:
+    """Split the portal ``ActionInvoked`` parameter array into (activation token, reply).
+
+    Per the v2 docs the array holds, in order and each only if applicable: the action
+    ``target``, ``platform-data`` (a{sv} with ``activation-token``) and the purpose's user
+    ``response``. We never set a target, and v1 backends send an empty array, so walk it
+    by type: the first dict is platform data, a string after it is the inline reply.
+    """
+    token: str | None = None
+    reply: str | None = None
+    seen_platform_data = False
+    for item in parameter or []:
+        if isinstance(item, dict) and not seen_platform_data:
+            seen_platform_data = True
+            value = item.get("activation-token")
+            token = value if isinstance(value, str) else None
+        elif isinstance(item, str) and seen_platform_data:
+            reply = item
+    return token, reply
 
 
 def edit_window(token: str | None, timeout_s: float) -> dict[str, Any]:

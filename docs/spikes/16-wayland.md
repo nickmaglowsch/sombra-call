@@ -76,7 +76,7 @@ What the docs do **not** answer, so the run must: whether GNOME shows a dialog o
 
 ## Method: test protocol for a human (about 1.5 h)
 
-Everything runs from `scripts/spikes/16/` with the system Python. One terminal is enough; keep it visible. Every script writes `logs/<name>-<stamp>.jsonl`. **Do not run any of this during a real meeting with other people**; use a meeting with yourself (a second device or a test call) and synthetic content.
+Everything runs from `scripts/spikes/16/` with the system Python. Use **two terminals**: terminal A runs the 30-minute `capture.py` and takes your `d` marks on its stdin; terminal B runs everything else. Every script writes `logs/<name>-<stamp>.jsonl`. **Do not run any of this during a real meeting with other people**; use a meeting with yourself (a second device or a test call) and synthetic content.
 
 ### 0. Prepare (10 min)
 
@@ -90,7 +90,7 @@ Everything runs from `scripts/spikes/16/` with the system Python. One terminal i
 
 ### 1. Q1 screen capture (45 min, runs in the background of steps 2–4)
 
-1. First run ever (expect exactly one dialog): `rm -f logs/restore_token.txt; python3 capture.py --mode stream --minutes 30 --app-id org.sombra.Spike`. Choose **the monitor** (not a window) and, if the dialog offers "Remember this selection" / "Allow restore", tick it. Type `d` + Enter in the terminal for **every** dialog you see, including this first one. Type a note (e.g. `indicator: orange icon top right`) to describe what the sharing indicator looks like. Leave it running and do steps 2–4 meanwhile; the capture keeps going.
+1. First run ever (expect exactly one dialog): `rm -f logs/restore_token.txt; python3 capture.py --mode stream --minutes 30 --app-id org.sombra.Spike`. Choose **the monitor** (not a window) and, if the dialog offers "Remember this selection" / "Allow restore", tick it. Type `d` + Enter in terminal A for **every** dialog you see, including this first one. Type a note (e.g. `indicator: orange icon top right`) to describe what the sharing indicator looks like. Leave it running and do sections 2–4 (Q2–Q4) in terminal B meanwhile; the capture keeps going. Come back to terminal A to mark any dialog.
 2. After 30 min it exits. Restart test: run `python3 capture.py --mode stream --minutes 2 --app-id org.sombra.Spike` again. Mark any dialog with `d`.
 3. Reboot test (optional, +5 min): reboot, log in, run the same 2-minute command. Mark dialogs.
 4. Rotation / on-trigger fallback: `python3 capture.py --mode per-capture --minutes 5 --interval 10 --app-id org.sombra.Spike` (about 30 new sessions, each restored from the previous token). Mark dialogs; note whether the sharing indicator flashes each time.
@@ -98,7 +98,7 @@ Everything runs from `scripts/spikes/16/` with the system Python. One terminal i
 6. Window instead of monitor: `python3 capture.py --mode stream --minutes 2 --window --token-file logs/token-window.txt` twice, sharing the meeting window. In between, change the meeting's title (e.g. switch browser tab) and note it.
 7. Screenshot portal: `python3 capture.py --mode screenshot --minutes 2 --interval 10`. Mark dialogs; note any flash or sound.
 
-Pass: step 1 has `captures` ≥ 355 with max gap ≤ 10 s, and `dialogs seen` = 1 (the first); steps 2 and 4 have `dialogs seen` = 0 and every `screencast_start` shows `restore_token_sent: true`.
+Pass: step 1 has `captures` ≥ 355 with max gap ≤ 10 s and `fresh frames` ≥ 0.95 × `captures` (with `keepalive-time=1000` every tick should get a new buffer; stale ticks mean the stream stalled), and `dialogs seen` = 1 (the first); steps 2 and 4 have `dialogs seen` = 0 and every `screencast_start` shows `restore_token_sent: true`.
 
 ### 2. Q2 notifications (15 min)
 
@@ -128,7 +128,7 @@ Pass (per method): the reported title matches the clicked window for ≥ 3 of 4 
 
 ### 5. Report (10 min)
 
-`python3 summarize.py > logs/summary.md`, paste its tables into "Results" below unchanged, add the notes on what you saw, fill in "Setup", then fill in the "Measured" column and confirm or change each decision. Remove `restore_token.txt` and do not commit anything from `logs/`.
+`python3 summarize.py > logs/summary.md`. It prints one section per log file. Copy its numbers, unchanged, into the per-run rows of the "Results" tables below, and paste the whole file into "Appendix: raw summarize output" so every number can be traced to a log. Add the notes on what you saw, fill in "Setup", then fill in the "Measured" column and confirm or change each decision. Remove `restore_token.txt` and do not commit anything from `logs/`.
 
 ## Results log format
 
@@ -146,7 +146,7 @@ Each script writes JSON lines with `ts` (local ISO-8601), `t` (seconds since sta
 
 ## Results
 
-All pending human run. Paste `summarize.py` output here.
+All pending human run. Each row takes its numbers from the matching section of `summarize.py` output (the section name is the log file name); the raw output goes in the appendix at the end.
 
 ### Q1 screen capture
 
@@ -198,9 +198,13 @@ Proposed from the documentation; each line is confirmed or changed once the resu
 3. **System audio (Q3)**: go with the default sink monitor as OUTROS and the default source as EU, both at 16 kHz mono. Recommend headphones; with speakers, evaluate PipeWire's echo-cancel module in phase 2.
 4. **Window title (Q4)**: record `app=None`, `window_title=None` on Wayland (the `FrameRecord` contract already allows it) and let the user name the shared source at meeting start. Offer the extension or AT-SPI only if the run shows they work without unsafe mode and the privacy cost is acceptable.
 
+## Appendix: raw summarize output
+
+Pending human run. Paste `logs/summary.md` here unchanged.
+
 ## Left for a human
 
-1. Run the protocol above on Ubuntu GNOME Wayland and paste the `summarize.py` tables into "Results".
+1. Run the protocol above on Ubuntu GNOME Wayland, copy the `summarize.py` numbers into "Results" and paste its raw output into the appendix.
 2. Fill in "Setup" and the "Measured" column of the summary; confirm or change each decision.
 3. Move ADR 0016 from "proposed" to "accepted" (or rewrite it) and open the phase-2 issues it lists.
 4. Close issue #16.
