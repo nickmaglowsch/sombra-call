@@ -233,3 +233,15 @@ def test_prefers_the_vocative_mention() -> None:
 
 def test_phatic_greeting_does_not_trigger() -> None:
     assert make().feed(others(0, "Nick, tudo bem?")) is None
+
+
+@pytest.mark.parametrize(
+    "text",
+    ["Nick tá de férias, né?", "Nick fechou com o cliente, não foi?", "Nicolas Cage fez isso, né?"],
+)
+def test_statements_about_the_user_do_not_trigger(text: str) -> None:
+    assert make().feed(others(0, text)) is None
+
+
+def test_dropped_question_mark_after_voce_still_triggers() -> None:
+    assert make().feed(others(0, "nick você já testou isso em produção")) is not None

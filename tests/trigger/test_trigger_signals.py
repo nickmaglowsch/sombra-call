@@ -6,6 +6,7 @@ from sombra.trigger.signals import (
     VOCATIVE_FULL,
     VOCATIVE_MID,
     VOCATIVE_START,
+    Position,
     addresses_someone_else,
     is_deictic,
     is_phatic,
@@ -138,3 +139,47 @@ def test_not_deictic(text: str) -> None:
 )
 def test_addresses_someone_else(text: str, other: bool) -> None:
     assert addresses_someone_else(tokenize(text)) is other
+
+
+@pytest.mark.parametrize(
+    "text",
+    [
+        "Nick tá de férias, né?",
+        "Nick fechou com o cliente, não foi?",
+        "Nick também acha isso, né?",
+        "Nick sempre fala isso, né?",
+        "Nick entregou tudo ontem, certo?",
+        "Nicolas já mandou o orçamento, não mandou?",
+    ],
+)
+def test_tag_question_about_the_user_is_a_reference(text: str) -> None:
+    tokens = tokenize(text)
+    hit = NameMatcher(["Nick", "Nicolas"]).find_all(tokens)[0]
+    assert name_position(tokens, hit).reference
+
+
+@pytest.mark.parametrize(
+    "text", ["Nick o que você acha, né?", "Nick consegue ver isso, né?", "Nick, tá de férias?"]
+)
+def test_tag_question_after_a_real_ask_is_still_a_call(text: str) -> None:
+    tokens = tokenize(text)
+    assert not name_position(tokens, MATCHER.find_all(tokens)[0]).reference
+
+
+def test_namesake_full_name_is_a_reference() -> None:
+    tokens = tokenize("Nicolas Cage fez aquele filme, lembra?")
+    hit = NameMatcher(["Nicolas"]).find_all(tokens)[0]
+    assert name_position(tokens, hit).reference
+
+
+def test_configured_full_name_is_not_a_namesake() -> None:
+    tokens = tokenize("Nick Maglowsch, você pode falar?")
+    hit = NameMatcher(["Nick", "Nick Maglowsch"]).find_all(tokens)[0]
+    assert hit.alias == "Nick Maglowsch"
+    assert name_position(tokens, hit) == Position(VOCATIVE_FULL, reference=False)
+
+
+def test_second_person_after_the_name_implies_a_question() -> None:
+    tokens = tokenize("nick você já testou isso em produção")
+    pos = name_position(tokens, MATCHER.find_all(tokens)[0])
+    assert pos == Position(VOCATIVE_START, reference=False, implied_question=True)

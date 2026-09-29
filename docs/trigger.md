@@ -35,7 +35,13 @@ detector = NameTriggerDetector("Nick", aliases=["Nicolas"], settings=TriggerSett
 3. **Position (G2).** The name must look like a call: sentence start, end, or
    between commas, optionally after an interjection ("e aí Nick, …"). After an article
    or preposition ("o Nick", "pro Nick") or before a 3rd-person verb without a comma
-   ("Nick falou que …") it is a reference and does not fire.
+   ("Nick falou que …") it is a reference and does not fire. The same holds for a
+   statement about the user whose only question is a trailing tag ("Nick tá de férias,
+   né?", "Nick fechou com o cliente, não foi?"), and for another person's full name
+   (a capitalised word right after the name that is not part of a configured alias:
+   "Nicolas Cage …"). With a comma ("Nick, tá de férias?") it is a call. When the
+   name opens the line and "você/cê/tu" follows directly, a dropped `?` is assumed
+   ("nick você já testou isso em produção").
 4. **Request (G2).** Question mark, interrogatives, opinion asks ("você acha"),
    request verbs ("pode", "consegue", "explica", "me diz"), turn handoffs ("sua vez",
    "contigo"). "Você" and weak verbs only count inside a question. Closings
@@ -64,3 +70,4 @@ Known misses on the holdout split, kept on purpose so the numbers stay honest:
 
 - `hm08` "Nico, …": a 3-letter key only matches exactly, so "Nico" is not "Nick".
 - `hn08` "Nick, você manda muito bem nisso.": "manda" is read as a request verb.
+- `hw04` "tá mas nick e o custo disso": no punctuation and no request word at all.

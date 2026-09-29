@@ -117,11 +117,14 @@ class NameTriggerDetector:
             pos = name_position(tokens, hit)
             if best is None or _rank(hit, pos) > _rank(*best):
                 best = (hit, pos)
+        request = request_strength(line.text)
+        if best is not None and best[1].implied_question:
+            request = request_strength(line.text + "?")
         return _Analysis(
             line=line,
             hit=best[0] if best else None,
             position=best[1] if best else None,
-            request=request_strength(line.text),
+            request=request,
             phatic=is_phatic(tokens, best[0] if best else None),
             other_addressee=addresses_someone_else(tokens),
         )

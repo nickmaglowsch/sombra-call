@@ -35,7 +35,8 @@ _INTERJECTIONS = _wordset(
 _SUBJECT_VERBS = _wordset(
     "disse falou fez ficou mandou comentou pediu vai foi esta estava tava tinha tem ja "
     "era sabe acha achou acabou subiu entrou saiu chegou pegou ia deve precisa quer queria "
-    "conseguiu apresentou mostrou said says did will was is has had thinks"
+    "conseguiu apresentou mostrou fechou ta tambem sempre nunca ainda so "
+    "said says did will was is has had thinks"
 )
 _END_PUNCT = frozenset("?!.…")
 
@@ -49,6 +50,7 @@ VOCATIVE_MID = 0.3  # "você acha Nick que dá"
 class Position:
     vocative: float  # 0..1, how much the name position looks like someone calling the user
     reference: bool  # the name is talked about ("o Nick", "Nick falou que")
+    implied_question: bool = False  # "Nick você já testou isso" (Whisper dropped the "?")
 
 
 def _starts_clause(tokens: Sequence[Token], i: int) -> bool:
@@ -78,15 +80,36 @@ def name_position(tokens: Sequence[Token], hit: NameHit) -> Position:
         return Position(0.0, reference=True)
     before_ok = _starts_clause(tokens, hit.start)
     after_ok = nxt is None or nxt.is_boundary
-    if before_ok and nxt is not None and nxt.is_word and nxt.text in _SUBJECT_VERBS:
-        return Position(0.0, reference=True)
+    if nxt is not None and nxt.is_word:
+        if nxt.text in _SUBJECT_VERBS and before_ok:
+            return Position(0.0, reference=True)
+        if nxt.raw[:1].isupper() and nxt.text not in _SECOND_PERSON_WORDS:
+            return Position(0.0, reference=True)  # a namesake's full name: "Nicolas Cage ..."
     if before_ok and after_ok:
         return Position(VOCATIVE_FULL, reference=False)
     if nxt is None or nxt.text in _END_PUNCT:
         return Position(VOCATIVE_END, reference=False)
     if before_ok:
-        return Position(VOCATIVE_START, reference=False)
+        return _start_position(tokens[hit.end :])
     return Position(VOCATIVE_MID, reference=False)
+
+
+def _start_position(rest: Sequence[Token]) -> Position:
+    """Name opens the line with no comma: a call only if what follows talks *to* the user.
+
+    "Nick você já testou isso" and "Nick o que você acha" are calls with a dropped
+    comma; "Nick tá de férias, né?" is a statement about Nick to the group, where the
+    only question is the tag at the end.
+    """
+    if rest[0].text in _SECOND_PERSON_WORDS:
+        return Position(VOCATIVE_START, reference=False, implied_question=True)
+    text = " ".join(t.raw for t in rest)
+    folded = fold(text)
+    if _ADDRESSED_OPENING.match(folded):
+        return Position(VOCATIVE_START, reference=False)
+    if (m := _TAG_QUESTION.search(folded)) and request_strength(folded[: m.start()]) < 0.4:
+        return Position(0.0, reference=True)
+    return Position(VOCATIVE_START, reference=False)
 
 
 # Words that open a sentence with a comma without addressing anyone ("Então, ...").
@@ -120,6 +143,10 @@ def _words(*phrases: str) -> re.Pattern[str]:
     return re.compile(rf"(?<!\w)(?:{alternatives})(?!\w)")
 
 
+def _opening(*patterns: re.Pattern[str]) -> re.Pattern[str]:
+    return re.compile("^(?:" + "|".join(p.pattern for p in patterns) + ")")
+
+
 _INTERROGATIVE = _words(
     "o que", "oque", "que que", "qual", "quais", "quando", "quem", "por que", "porque",
     "pq", "como", "onde", "cade", "quanto", "quantos", "quantas", "sera que", "what",
@@ -140,6 +167,8 @@ _WEAK_REQUEST = _words(
     "sabe", "lembra", "viu", "tem", "ta", "esta", "vai", "quer", "precisa", "chegou",
     "do you", "did you", "are you", "have you", "is it",
 )  # fmt: skip
+_ADDRESSED_OPENING = _opening(_INTERROGATIVE, _OPINION, _REQUEST)
+
 # Standup turn handoffs: "Nick, sua vez", "agora contigo, Nick".
 _HANDOFF = _words(
     "sua vez", "tua vez", "contigo", "com voce", "com vc", "e voce", "e vc", "e ce",
@@ -148,6 +177,13 @@ _HANDOFF = _words(
 _SECOND_PERSON = _words(
     "voce", "voces", "vc", "vcs", "ce", "tu", "te", "contigo", "you", "your",
 )  # fmt: skip
+_SECOND_PERSON_WORDS = _wordset("voce vc ce tu you")
+# Tag questions turn a statement into a "question" without asking the listener anything.
+_TAG_QUESTION = re.compile(
+    r"(?:^|[\s,])(?:ne|ne nao|nao e|nao foi|nao \w+|certo|ok|right)"
+    r"\s*\?\s*$"
+)
+
 _CLOSING = _words(
     "valeu", "obrigado", "obrigada", "brigado", "brigada", "tchau", "ate mais",
     "ate amanha", "thanks", "thank you", "bom trabalho", "parabens",
