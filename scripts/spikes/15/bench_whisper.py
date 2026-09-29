@@ -183,7 +183,7 @@ def download(url: str, dest: Path) -> Path:
     tmp = dest.with_suffix(dest.suffix + ".part")
     log(f"downloading {url}")
     # URLs are the fixed https constants above.
-    with urllib.request.urlopen(url) as resp, tmp.open("wb") as fh:  # noqa: S310
+    with urllib.request.urlopen(url, timeout=60) as resp, tmp.open("wb") as fh:  # noqa: S310
         shutil.copyfileobj(resp, fh, length=1 << 20)
     tmp.replace(dest)
     return dest
@@ -275,7 +275,7 @@ def fleurs_subset(work: Path, lang: str, count: int) -> list[Clip]:
     url = f"{FLEURS}/{lang}/audio/test.tar.gz"
     log(f"streaming {url} (stops after {count} clips)")
     with (
-        urllib.request.urlopen(url) as resp,  # noqa: S310 - fixed https constant
+        urllib.request.urlopen(url, timeout=60) as resp,  # noqa: S310 - fixed https constant
         tarfile.open(fileobj=resp, mode="r|gz") as tar,
     ):
         for member in tar:
@@ -714,7 +714,13 @@ def parse_args(argv: list[str] | None) -> argparse.Namespace:
     p.add_argument("--label", default=platform.node() or "machine",
                    help="machine label for the results file, e.g. mac-m2-16gb")  # fmt: skip
     p.add_argument("--work-dir", type=Path, default=Path.home() / ".cache" / "sombra-spike15")
-    p.add_argument("--out", type=Path, default=Path(__file__).resolve().parent / "results")
+    p.add_argument(
+        "--out",
+        type=Path,
+        default=None,
+        help="results dir (default: scripts/spikes/15/results, or <work-dir>/results with "
+        "--local-manifest so private hypotheses stay out of the repo)",
+    )
     p.add_argument("--models", nargs="+", default=DEFAULT_MODELS)
     p.add_argument("--model-file", action="append", default=[], metavar="NAME=PATH",
                    help="use a local ggml file instead of downloading NAME")  # fmt: skip
@@ -759,6 +765,9 @@ def main(argv: list[str] | None = None) -> int:
     info = machine_info(args.threads, args.cuda, args.server_arg)
     info["whisper_cpp"] = f"{args.whisper_tag} ({commit[:10]})"
     stamp = time.strftime("%Y%m%d-%H%M%S")
+    if args.out is None:
+        repo_results = Path(__file__).resolve().parent / "results"
+        args.out = work / "results" if args.local_manifest else repo_results
     args.out.mkdir(parents=True, exist_ok=True)
     base = args.out / f"{args.label}-{stamp}"
     report = {

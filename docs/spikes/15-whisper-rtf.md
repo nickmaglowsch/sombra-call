@@ -103,7 +103,9 @@ What the script does:
    - **Peak RSS** of the server process (sampled every 100 ms), **CPU** as cores busy and as
      % of the machine during the measured window, **GPU** utilisation from `nvidia-smi` or,
      on macOS, `ioreg` IOAccelerator "Device Utilization %" (no sudo). On Apple Silicon the
-     Metal buffers live in unified memory and may not all show up in RSS.
+     Metal buffers live in unified memory and may not all show up in RSS. The GPU memory
+     figure is `nvidia-smi` `memory.used` for the whole device (desktop and other processes
+     included), not whisper-server alone; read it against an idle baseline.
 
 ### Consented local clips (optional, recommended)
 
@@ -111,8 +113,9 @@ What the script does:
 e.g. the two code-switching scripts and the name-heavy question in
 [`scripts/spikes/15/local-clips.example.json`](../../scripts/spikes/15/local-clips.example.json).
 Record them in your own voice, any format ffmpeg reads, next to the manifest. Only record
-yourself or people who agreed; do not commit the audio, and do not commit a results JSON
-from a run with local clips if the text is private (it contains the hypotheses).
+yourself or people who agreed; do not commit the audio. With `--local-manifest` the results
+go to `~/.cache/sombra-spike15/results/` (not the repo) unless `--out` is given, because
+the JSON contains the hypotheses.
 
 ```sh
 uv run scripts/spikes/15/bench_whisper.py --label mac-m2-16gb \
@@ -226,5 +229,7 @@ reference numbers are in.
    (optionally with `--local-manifest` and the three clips in the example manifest).
 2. On an Ubuntu machine without GPU: `uv run scripts/spikes/15/bench_whisper.py --label ubuntu-<cpu>-cpu`.
 3. If an NVIDIA machine is available: the two `--cuda` commands in §3.
-4. Paste each `results/*.md` table into §4, commit the `results/*.json` (FLEURS runs only),
+4. If the FLEURS fetch fails (layout or URL changed), report it on #15 instead of switching
+   to other clips, so the results stay comparable across machines.
+5. Paste each `results/*.md` table into §4, commit the `results/*.json` (FLEURS runs only),
    fill §2 and confirm or change the recommendation in §5.
