@@ -125,7 +125,7 @@ async def test_unplugged_headset_falls_back_without_touching_system_audio(
     assert r.stream(OTHERS) is system_stream and not system_stream.stopped
     assert r.kinds(OTHERS) == []
     assert r.sd.reinitialised == 1  # only the tap's, at start: no re-enumeration
-    assert len(r.src._queue) > frames_before
+    wait(lambda: len(r.src._queue) > frames_before)
     await r.src.close()
 
 
@@ -370,14 +370,27 @@ def test_fourcc() -> None:
 
 async def test_chunk_stamps_stay_increasing_across_reconnects(rigs: list[Rig]) -> None:
     r = _rig(rigs, mic="USB Mic", default_input="USB Mic")
+
+    def queued(ch: Channel) -> int:
+        with r.src._queue._lock:
+            return sum(c.channel is ch for c in r.src._queue._items)
+
+    def more_audio() -> None:
+        # Every stream must deliver chunks, or a boundary would go untested.
+        target = {ch: queued(ch) + 3 for ch in Channel}
+        wait(lambda: all(queued(ch) >= n for ch, n in target.items()))
+
+    more_audio()
     for i in range(5):
         r.sd.unplug("USB Mic")
         r.watcher.changed()
         wait(r.restored(ME, 2 * i + 1))
+        more_audio()
         r.sd.plug("USB Mic", inputs=2, rate=44100.0)
         r.watcher.changed()
         wait(r.restored(ME, 2 * i + 2))
         wait(r.restored(OTHERS, i + 1))  # system audio was reopened by the re-init
+        more_audio()
     await r.src.close()
     starts: dict[Channel, list[Any]] = {ME: [], OTHERS: []}
     while (chunk := await r.src._queue.get()) is not None:
