@@ -34,13 +34,13 @@ ANTHROPIC_API_KEY=... uv run --with pillow --with claude-agent-sdk \
 uv run --with pillow python scripts/spikes/9/run_spike.py --dry-run
 uv run --with pillow python scripts/spikes/9/run_spike.py --dry-run --model claude-sonnet-5-5
 
-# acceptance checks on a small fixture meeting (needs brain.prompt from #8)
+# acceptance checks on a small fixture meeting
 ANTHROPIC_API_KEY=... uv run pytest -m network tests/brain/test_brain_claude_network.py -s
 ```
 
 The harness writes one JSON line per call (latency, usage, frames, images in the request, tool calls) and prints the markdown tables to paste here. Cost uses the per-model prices in `PRICES` (from the pricing page, 2026-09-29).
 
-How the offline model works: it applies the documented cache rules to the real requests `ClaudeBrain` builds. A request reads the longest live cached prefix, writes the rest up to the breakpoint, and pays full price for the tail. Every read or write refreshes the entry for its TTL. Token counts are an **estimate**: PT-BR text at ~3 characters per token (the tokenizer on Claude 4.7 and later produces ~30% more tokens than chars/4), 286 tool-use system tokens (pricing docs), and ⌈w/28⌉×⌈h/28⌉ = 1,196 tokens per 1280×720 frame (vision docs, high-resolution tier). Other assumptions: 60 output tokens per answer, no tool rounds, and no thinking tokens. Thinking is always on for Opus 5.5 and is billed as output, so the real output cost will be higher.
+How the offline model works: it applies the documented cache rules to the real requests `ClaudeBrain` builds with `brain.prompt` (#8). A request reads the longest live cached prefix, writes the rest up to the breakpoint, and pays full price for the tail. Every read or write refreshes the entry for its TTL. Token counts are an **estimate**: PT-BR text at ~3 characters per token (the tokenizer on Claude 4.7 and later produces ~30% more tokens than chars/4), 286 tool-use system tokens (pricing docs), and ⌈w/28⌉×⌈h/28⌉ = 1,196 tokens per 1280×720 frame (vision docs, high-resolution tier). Other assumptions: 60 output tokens per answer, no tool rounds, and no thinking tokens. Thinking is always on for Opus 5.5 and is billed as output, so the real output cost will be higher.
 
 ## 4. Results
 
@@ -50,11 +50,11 @@ How the offline model works: it applies the documented cache rules to the real r
 
 | Arm | Cache read | Cache write | Uncached in | Hit rate, answers 2–10 (all input) | Prefix hit rate, answers 2–10 | Cost / h (US$) | Images leak |
 |---|---|---|---|---|---|---|---|
-| messages-1h | 93,271 | 19,399 | 11,387 | 76% | 83% | 0.231 | no |
-| messages-5m | 35,087 | 77,583 | 11,387 | 28% | 31% | 0.452 | no |
-| messages-5m-keepalive | 156,345 | 19,399 | 11,408 | 76% | 83% | 0.186 | no |
+| messages-1h | 101,984 | 19,459 | 11,933 | 77% | 84% | 0.236 | no |
+| messages-5m | 38,555 | 82,888 | 11,933 | 28% | 31% | 0.482 | no |
+| messages-5m-keepalive | 171,611 | 19,459 | 11,954 | 77% | 85% | 0.191 | no |
 
-`claude-sonnet-5-5` ($2 / $2.50 / $4 / $0.20 / $10): 1h US$ 0.125/h, 5m US$ 0.230/h, 5m+keep-alive US$ 0.109/h, with the same token counts.
+`claude-sonnet-5-5` ($2 / $2.50 / $4 / $0.20 / $10): 1h US$ 0.128/h, 5m US$ 0.245/h, 5m+keep-alive US$ 0.113/h, with the same token counts.
 
 Per-trigger view for the 5-minute arm: triggers 2, 4, 5, 6, 8 and 10 follow gaps longer than 5 min and rewrite the whole prefix (4k → 20k tokens). The 1-hour arm writes only the transcript added since the previous trigger. "Hit rate (all input)" counts the uncached tail (question, last 60 s, up to 3.6k image tokens), which is why it is lower than the prefix hit rate.
 
@@ -102,7 +102,7 @@ Acceptance tests in `tests/brain/test_brain_claude_network.py`:
 
 ## 6. Decision
 
-Provisional, in [ADR 0009](../adr/0009-claude-backend-and-cache-ttl.md): use **our own Messages API loop** with **1-hour TTL** and `claude-opus-5-5` at `effort: low`. Each answer is stateless and built from the cached prefix plus an ephemeral tail. The offline model puts it at ~US$ 0.23 per 1 h meeting on Opus 5.5 (~US$ 0.13 on Sonnet 5.5), within the US$ 1 target. The latency target (p50 ≤ 4 s for the LLM stage) is **unverified** until the measured run.
+Provisional, in [ADR 0009](../adr/0009-claude-backend-and-cache-ttl.md): use **our own Messages API loop** with **1-hour TTL** and `claude-opus-5-5` at `effort: low`. Each answer is stateless and built from the cached prefix plus an ephemeral tail. The offline model puts it at ~US$ 0.24 per 1 h meeting on Opus 5.5 (~US$ 0.13 on Sonnet 5.5), within the US$ 1 target. The latency target (p50 ≤ 4 s for the LLM stage) is **unverified** until the measured run.
 
 A human finishing this spike should:
 

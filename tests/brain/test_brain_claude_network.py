@@ -1,6 +1,6 @@
 """Live checks of ClaudeBrain against the real API (``network``; never run in CI).
 
-Run by hand, with a key in the environment and ``brain.prompt`` (#8) merged::
+Run by hand, with a key in the environment::
 
     ANTHROPIC_API_KEY=... uv run pytest -m network tests/brain/test_brain_claude_network.py -s
 
@@ -26,6 +26,7 @@ from sombra.brain.claude import (
     ModelReply,
     PromptKit,
     cache_hit_rate,
+    default_prompt_kit,
 )
 from sombra.brain.tools import TOOL_NAMES, MeetingTools, ToolError, _check_glob
 from sombra.contracts import BrainRequest, Channel, SpeechLine, TriggerEvent
@@ -40,14 +41,7 @@ FILLER = (
 
 
 def _kit() -> PromptKit:
-    prompt: Any = pytest.importorskip("sombra.brain.prompt")
-    return PromptKit(
-        prompt.system_prompt,
-        prompt.PrefixBuilder,
-        prompt.build_tail,
-        prompt.render_request,
-        getattr(prompt, "parse_frame_request", None),
-    )
+    return default_prompt_kit()
 
 
 def _key() -> str:

@@ -7,8 +7,9 @@ C5 backend interface.
 Every answer is one short, stateless conversation built from scratch:
 
 * **prefix** (tools, system, context, epoch summary, transcript) from
-  ``brain.prompt`` (#8); append-only, so it is byte-identical to the previous call
-  up to the new transcript lines and hits the prompt cache;
+  ``brain.prompt`` (#8, injectable through :class:`PromptKit`); append-only, so it
+  is byte-identical to the previous call up to the new transcript lines and hits
+  the prompt cache;
 * **tail** (last 60 s, the question, 0-3 frames) after the cache breakpoint.
 
 Nothing from an answer is kept for the next one, so images never enter any later
@@ -31,6 +32,7 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any, Literal, Protocol
 
+from sombra.brain import prompt as _prompt
 from sombra.brain.tools import MeetingTools, ToolError
 from sombra.contracts import (
     AutonomyLevel,
@@ -145,6 +147,17 @@ class PromptKit:
     parse_frame_request: Callable[[str], str | None] | None = None
 
 
+def default_prompt_kit() -> PromptKit:
+    """The real prompt assembly from ``brain.prompt`` (#8)."""
+    return PromptKit(
+        system_prompt=_prompt.system_prompt,
+        prefix_builder=_prompt.PrefixBuilder,
+        build_tail=_prompt.build_tail,
+        render_request=_prompt.render_request,
+        parse_frame_request=_prompt.parse_frame_request,
+    )
+
+
 # --- settings ----------------------------------------------------------------------
 
 
@@ -173,10 +186,12 @@ class ClaudeBrain:
 
     backend = BACKEND_NAME
 
-    def __init__(self, settings: ClaudeSettings, client: ModelClient, prompt: PromptKit) -> None:
+    def __init__(
+        self, settings: ClaudeSettings, client: ModelClient, prompt: PromptKit | None = None
+    ) -> None:
         self.settings = settings
         self._client = client
-        self._prompt = prompt
+        self._prompt = prompt if prompt is not None else default_prompt_kit()
         self._tools: MeetingTools | None = None
         self._prefix: PrefixSource | None = None
         self._transcript_offset = 0
