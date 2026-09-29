@@ -50,7 +50,7 @@ Without a terminal (for example under CI) and without `--yes`, every question is
 curl -fsSL https://github.com/nickmaglowsch/sombra-call/releases/latest/download/install.sh | sh -s -- --uninstall
 ```
 
-This runs `uv tool uninstall sombra` and, after you confirm, deletes `~/.cache/sombra/models`. It **never** deletes your meetings (`~/Sombra/meetings`) or your config (`~/.config/sombra`), and leaves uv installed. Delete those yourself if you want them gone; API keys are removed with `sombra auth clear <provider>`.
+This runs `uv tool uninstall sombra` and, after you confirm, deletes the model files it downloaded from `~/.cache/sombra/models` (the folder too, unless you put other files in it). It **never** deletes your meetings (`~/Sombra/meetings`) or your config (`~/.config/sombra`), and leaves uv installed. Delete those yourself if you want them gone; API keys are removed with `sombra auth clear <provider>`.
 
 ## `sombra doctor`
 

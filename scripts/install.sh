@@ -64,7 +64,10 @@ cleanup() {
         rm -rf "$TMP_DIR"
     fi
 }
-trap cleanup EXIT INT TERM
+trap cleanup EXIT
+# Stop on Ctrl-C / kill instead of carrying on with the next step; EXIT then cleans up.
+trap 'exit 130' INT
+trap 'exit 143' TERM
 
 # ask "question" -> 0 for yes. --yes answers yes; with no terminal the answer is no.
 ask() {
@@ -423,7 +426,19 @@ uninstall() {
             *) die "refusing to delete unexpected models path: $models_dir" ;;
         esac
         if ask "Delete the downloaded models in $models_dir?"; then
-            run rm -rf "$models_dir"
+            # Only the files Sombra downloads (and their partial downloads); anything
+            # else the user put there stays, and so does the folder then.
+            for f in "$models_dir"/ggml-*.bin "$models_dir"/ggml-*.bin.part \
+                "$models_dir"/silero_vad.onnx "$models_dir"/silero_vad.onnx.part; do
+                if [ -f "$f" ]; then
+                    run rm -f "$f"
+                fi
+            done
+            if rmdir "$models_dir" 2>/dev/null; then
+                note "removed $models_dir"
+            else
+                note "kept $models_dir: it holds files the installer did not download"
+            fi
         else
             note "kept $models_dir"
         fi

@@ -11,6 +11,8 @@ on:
       - src/sombra/config/**
       - src/sombra/transcription/commands.py
       - src/sombra/transcription/models.py
+      - src/sombra/audio/devices.py
+      - src/sombra/privacy/secrets.py
       - pyproject.toml
   push:
     branches: [main]
@@ -20,6 +22,8 @@ on:
       - src/sombra/config/**
       - src/sombra/transcription/commands.py
       - src/sombra/transcription/models.py
+      - src/sombra/audio/devices.py
+      - src/sombra/privacy/secrets.py
       - pyproject.toml
   workflow_dispatch:
 
@@ -83,6 +87,8 @@ jobs:
           fails = [c for c in data["checks"] if c["status"] == "fail"]
           unexpected = [c for c in fails if not c["name"].startswith("model ")]
           assert not unexpected, unexpected
+          crashed = [c for c in data["checks"] if c["detail"].startswith("could not check")]
+          assert not crashed, crashed
           EOF
 
       - name: sombra doctor (text)
@@ -112,7 +118,7 @@ jobs:
           mkdir -p ~/Sombra/meetings/2026-01-01_0900_smoke
           echo "[09:00:00] EU: teste" > ~/Sombra/meetings/2026-01-01_0900_smoke/transcript.md
           mkdir -p "$(sombra models path)"
-          touch "$(sombra models path)/placeholder.bin"
+          touch "$(sombra models path)/ggml-tiny.bin" "$(sombra models path)/silero_vad.onnx"
           sh scripts/install.sh --uninstall --yes
           if command -v sombra; then echo "sombra still installed"; exit 1; fi
           test -f ~/Sombra/meetings/2026-01-01_0900_smoke/transcript.md

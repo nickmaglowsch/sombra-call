@@ -306,3 +306,36 @@ def test_doctor_command_exit_code_and_json(
     ok = _probes(tmp_path)
     monkeypatch.setattr(doctor, "live_probes", lambda config, models_dir: ok)
     assert main(["doctor"]) == 0
+
+
+class _InputOutputPair:
+    """Mimics ``sounddevice.default.device``: indexable, but not a tuple."""
+
+    def __init__(self, inp: int | None, out: int | None) -> None:
+        self._pair = (inp, out)
+
+    def __getitem__(self, i: int) -> int | None:
+        return self._pair[i]
+
+
+@pytest.mark.parametrize(
+    ("device", "index"),
+    [
+        (_InputOutputPair(3, 5), 3),
+        (_InputOutputPair(None, 5), -1),
+        (_InputOutputPair(-1, -1), -1),
+        ([2, 4], 2),
+        (7, 7),
+        (None, -1),
+    ],
+)
+def test_input_index(device: object, index: int) -> None:
+    assert doctor.input_index(device) == index
+
+
+def test_missing_whisper_model_fix_names_the_model(tmp_path: Path) -> None:
+    p = _probes(tmp_path)
+    spec = ModelSpec("whisper tiny", "ggml-tiny.bin", "0" * 64, "sombra models download tiny")
+    p = replace(p, models=(spec,))
+    c = _by_name(run_checks(p))["model whisper tiny"]
+    assert c.fix == "run `sombra models download tiny`"

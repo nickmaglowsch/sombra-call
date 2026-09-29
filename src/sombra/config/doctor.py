@@ -61,6 +61,7 @@ class ModelSpec:
     label: str
     filename: str
     sha256: str
+    download: str = "sombra models download"  # the command that fetches it
 
 
 MIN_MACOS = (14, 0)
@@ -136,7 +137,7 @@ def check_models(p: Probes) -> list[Check]:
                     f"model {m.label}",
                     Status.FAIL,
                     f"missing: {path}",
-                    "run `sombra models download`",
+                    f"run `{m.download}`",
                 )
             )
             continue
@@ -148,7 +149,7 @@ def check_models(p: Probes) -> list[Check]:
                     f"model {m.label}",
                     Status.FAIL,
                     f"checksum mismatch: {path}",
-                    f"delete {path} and run `sombra models download`",
+                    f"delete {path} and run `{m.download}`",
                 )
             )
         else:
@@ -515,12 +516,24 @@ def _mac_default_input() -> str | None:  # pragma: no cover - needs PortAudio
     from sombra.audio.devices import default_input
 
     sd: Any = importlib.import_module("sounddevice")
-    dev = sd.default.device
-    idx = dev[0] if isinstance(dev, list | tuple) else dev
     try:
-        return default_input(sd.query_devices(), int(idx) if idx is not None else -1).name
+        return default_input(sd.query_devices(), input_index(sd.default.device)).name
     except LookupError:
         return None
+
+
+def input_index(device: Any) -> int:
+    """The input half of ``sounddevice.default.device``, or -1 when unset.
+
+    ``default.device`` is an ``_InputOutputPair`` (indexable, but not a tuple), a plain
+    int, or None; the pair's items are an index or None/-1.
+    """
+    if device is None:
+        return -1
+    if isinstance(device, int):
+        return device
+    item = device[0]
+    return -1 if item is None else int(item)
 
 
 def _mac_system_audio(release: str) -> str | None:  # pragma: no cover - needs PortAudio
@@ -555,7 +568,12 @@ def live_probes(
     name = _whisper_model_name(stt)
     whisper = whisper_model(name)
     models = (
-        ModelSpec(f"whisper {name}", whisper.filename, whisper.sha256),
+        ModelSpec(
+            f"whisper {name}",
+            whisper.filename,
+            whisper.sha256,
+            f"sombra models download {name}",
+        ),
         ModelSpec("silero-vad", SILERO_VAD.filename, SILERO_VAD.sha256),
     )
     extra: dict[str, Any] = {}
