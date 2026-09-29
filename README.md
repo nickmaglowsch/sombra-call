@@ -47,6 +47,8 @@
 | Prompt-prefix cache hit rate | ≥ 80% |
 | Sombra CPU during a call | ≤ 25% average |
 
+`sombra report <meeting>` prints this table for recorded meetings; see [`docs/metrics.md`](docs/metrics.md).
+
 ## Platforms
 
 MVP (phase 1) is **macOS on Apple Silicon**. Ubuntu with Wayland (GNOME) is phase 2; its feasibility spikes run in parallel with the MVP. Windows, X11-first and joining calls as a bot are out of scope.

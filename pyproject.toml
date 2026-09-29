@@ -10,6 +10,8 @@ dependencies = [
     "keyring>=25.7.0",
     "numpy>=2.5.3",
     "onnxruntime>=1.30.0",
+    "pyobjc-framework-quartz>=10.3 ; sys_platform == 'darwin'",
+    "pyobjc-framework-screencapturekit>=10.3 ; sys_platform == 'darwin'",
     "pywhispercpp>=1.5.1",
 ]
 
