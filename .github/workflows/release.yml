@@ -35,6 +35,7 @@ jobs:
     outputs:
       version: ${{ steps.meta.outputs.version }}
       prerelease: ${{ steps.meta.outputs.prerelease }}
+      latest: ${{ steps.meta.outputs.latest }}
     steps:
       - uses: actions/checkout@v4
         with:
@@ -57,12 +58,14 @@ jobs:
         id: meta
         run: |
           if [ "$GITHUB_REF_TYPE" = tag ]; then
+            # shellcheck disable=SC2046 # one word per tag name
             uv run --no-project --python 3.12 scripts/release/tags.py check "$GITHUB_REF_NAME" \
-              --dist dist --github-output "$GITHUB_OUTPUT"
+              --dist dist --github-output "$GITHUB_OUTPUT" --tags $(git tag --list 'v*')
           else
             wheel=$(basename dist/sombra-*.whl)
             echo "version=$(echo "$wheel" | cut -d- -f2)" | tee -a "$GITHUB_OUTPUT"
             echo "prerelease=true" | tee -a "$GITHUB_OUTPUT"
+            echo "latest=false" | tee -a "$GITHUB_OUTPUT"
           fi
       - name: Write and verify SHA256SUMS
         run: |
@@ -156,10 +159,11 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
           PRERELEASE: ${{ needs.build.outputs.prerelease }}
+          LATEST: ${{ needs.build.outputs.latest }}
         run: |
-          flags=""
-          if [ "$PRERELEASE" = true ]; then flags="--prerelease"; else flags="--latest"; fi
-          # shellcheck disable=SC2086 # $flags is one known flag
+          # "Latest" (what releases/latest and install.sh resolve) is set explicitly: only
+          # the highest final version gets it, never a patch to an older line.
           gh release create "$GITHUB_REF_NAME" dist/* \
             --verify-tag --title "Sombra $GITHUB_REF_NAME" \
-            --notes-file "$RUNNER_TEMP/notes.md" $flags
+            --notes-file "$RUNNER_TEMP/notes.md" \
+            --prerelease="$PRERELEASE" --latest="$LATEST"

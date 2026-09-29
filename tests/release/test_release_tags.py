@@ -1,7 +1,15 @@
 from pathlib import Path
 
 import pytest
-from tags import TagError, check_artifacts, main, parse_tag, previous_tag, release_tags
+from tags import (
+    TagError,
+    check_artifacts,
+    is_latest,
+    main,
+    parse_tag,
+    previous_tag,
+    release_tags,
+)
 
 
 @pytest.mark.parametrize(
@@ -97,3 +105,26 @@ def test_cli_writes_github_output(tmp_path: Path, capsys: pytest.CaptureFixture[
 def test_cli_fails_on_bad_tag(capsys: pytest.CaptureFixture[str]) -> None:
     assert main(["check", "release-1"]) == 1
     assert "not a release tag" in capsys.readouterr().err
+
+
+@pytest.mark.parametrize(
+    ("current", "expected"),
+    [
+        ("v0.3.0", True),
+        ("v0.2.1", False),  # a patch to an older line never becomes releases/latest
+        ("v0.4.0-rc1", False),  # pre-releases are never "Latest"
+        ("v0.3.1", True),
+    ],
+)
+def test_is_latest(current: str, expected: bool) -> None:
+    tags = ["v0.1.0", "v0.2.0", "v0.3.0", "v0.4.0-rc1", current]
+    assert is_latest(parse_tag(current), tags) is expected
+
+
+def test_cli_reports_latest(tmp_path: Path) -> None:
+    out = tmp_path / "gh_output"
+    args = ["check", "v0.2.1", "--github-output", str(out), "--tags", "v0.2.0", "v0.3.0"]
+    assert main(args) == 0
+    assert out.read_text().splitlines()[-1] == "latest=false"
+    assert main(["check", "v0.4.0", "--github-output", str(out), "--tags"]) == 0
+    assert out.read_text().splitlines()[-1] == "latest=true"

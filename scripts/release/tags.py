@@ -6,8 +6,9 @@ this is the one place that knows the tag grammar::
     python scripts/release/tags.py check v0.2.0-rc1 --dist dist [--github-output "$GITHUB_OUTPUT"]
 
 ``check`` fails when the tag is malformed or when ``dist/`` holds a wheel or sdist whose
-version is not the tag's. It prints ``version=…`` and ``prerelease=true|false`` and, with
-``--github-output``, appends the same lines there for later workflow steps.
+version is not the tag's. It prints ``version=…`` and ``prerelease=true|false`` (plus
+``latest=true|false`` given ``--tags <every tag>``) and, with ``--github-output``, appends
+the same lines there for later workflow steps.
 
 Standard library only.
 """
@@ -101,6 +102,16 @@ def previous_tag(current: ReleaseTag, names: Iterable[str]) -> ReleaseTag | None
     return earlier[-1] if earlier else None
 
 
+def is_latest(current: ReleaseTag, names: Iterable[str]) -> bool:
+    """Whether ``current`` should be the repo's "Latest" release (what ``releases/latest``
+    and so ``install.sh`` resolve): a final release no lower than any other final release.
+    A patch to an older line (``v0.2.1`` after ``v0.3.0``) is not."""
+    if current.prerelease:
+        return False
+    finals = [t for t in release_tags(names) if not t.prerelease]
+    return all(t.sort_key <= current.sort_key for t in finals)
+
+
 def artifact_versions(dist: Path) -> dict[str, str]:
     """``{file name: version}`` for every sombra wheel and sdist in ``dist``."""
     found = {}
@@ -137,6 +148,12 @@ def main(argv: Sequence[str] | None = None) -> int:
     check.add_argument("tag")
     check.add_argument("--dist", type=Path, help="directory with the built wheel and sdist")
     check.add_argument("--github-output", type=Path, help="append key=value lines here")
+    check.add_argument(
+        "--tags",
+        nargs="*",
+        default=None,
+        help="every release tag in the repo; adds latest=true|false to the output",
+    )
     args = parser.parse_args(argv)
     try:
         tag = parse_tag(args.tag)
@@ -146,6 +163,8 @@ def main(argv: Sequence[str] | None = None) -> int:
         sys.stderr.write(f"tags: {e}\n")
         return 1
     lines = f"version={tag.version}\nprerelease={str(tag.prerelease).lower()}\n"
+    if args.tags is not None:
+        lines += f"latest={str(is_latest(tag, [*args.tags, tag.name])).lower()}\n"
     sys.stdout.write(lines)
     if args.github_output is not None:
         with args.github_output.open("a", encoding="utf-8") as f:

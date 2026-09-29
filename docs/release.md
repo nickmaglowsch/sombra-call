@@ -6,13 +6,13 @@ Sombra ships as GitHub Releases, built by `.github/workflows/release.yml` when a
 
 - [SemVer](https://semver.org/). During the MVP the major version stays `0`: `0.MINOR.PATCH`, where a minor bump may break config or CLI flags, and a patch bump only fixes things.
 - **The git tag is the version.** `pyproject.toml` has no version number. hatch-vcs reads it from the tag at build time, so cutting a release needs no commit on `main`, which only takes squash-merged PRs.
-- Tag format: `vX.Y.Z` for a release, and `vX.Y.Z-rcN`, `vX.Y.Z-betaN` or `vX.Y.Z-alphaN` for a pre-release. Pre-releases are published as GitHub pre-releases, and `releases/latest` never points at them. Python normalizes the version (PEP 440): `v0.2.0-rc1` builds `sombra 0.2.0rc1`.
+- Tag format: `vX.Y.Z` for a release, and `vX.Y.Z-rcN`, `vX.Y.Z-betaN` or `vX.Y.Z-alphaN` for a pre-release. Pre-releases are published as GitHub pre-releases. `releases/latest` (what `install.sh` installs by default) only ever points at the highest final version, so a patch to an older line such as `v0.2.1` after `v0.3.0` does not become "Latest". Python normalizes the version (PEP 440): `v0.2.0-rc1` builds `sombra 0.2.0rc1`.
 - **Untagged builds get a dev version**, such as `0.2.1.dev4+g1a2b3c4`: the next patch, the number of commits since the last tag, and the commit. A dirty tree adds `.dYYYYMMDD`. `sombra --version` prints it. In a checkout, `uv sync` rebuilds the editable install when HEAD or the tags move, so the number stays current. A source tree with no git metadata at all builds as `0.0.0`.
 
 ## Cutting a release
 
 1. Make sure `main` is green and holds everything the release needs.
-2. Tag the merged commit on `main` and push the tag. Only maintainers push tags.
+2. Tag the merged commit on `main` and push the tag. Only maintainers push tags (enforcing that with a tag ruleset is #54).
 
    ```sh
    git fetch origin
