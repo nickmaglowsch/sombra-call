@@ -46,8 +46,10 @@ jobs:
           BODY: ${{ github.event.pull_request.body }}
         run: |
           fail=0
-          if ! printf '%s' "$BODY" | grep -Eiq '(close[sd]?|fix(e[sd])?|resolve[sd]?) +#[0-9]+'; then
-            echo "::error::PR description must reference its issue, e.g. 'Closes #12'."
+          # 'Closes #N' when the PR finishes the issue; 'Refs #N' / 'Part of #N' when a human
+          # still has to finish it (e.g. runs that need real hardware).
+          if ! printf '%s' "$BODY" | grep -Eiq '(close[sd]?|fix(e[sd])?|resolve[sd]?|refs?|part of) +#[0-9]+'; then
+            echo "::error::PR description must reference its issue, e.g. 'Closes #12' or 'Refs #12'."
             fail=1
           fi
           if ! printf '%s' "$BODY" | grep -q '## Quality gates'; then
