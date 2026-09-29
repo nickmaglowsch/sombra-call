@@ -34,6 +34,8 @@ import contextlib
 import json
 import logging
 import os
+import re
+import signal
 import time
 from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass, field
@@ -68,6 +70,9 @@ BACKEND_NAME = "codex-cli"
 DEFAULT_MODEL_LABEL = "codex-default"  # reported when the Codex CLI picks its own model
 MAX_FRAMES = 3
 PERMISSION_PROFILE = "sombra"
+# Oldest CLI verified to honour every confinement flag (ADR 0018). An older CLI may
+# ignore ``default_permissions`` and read the whole disk, so it is refused.
+MIN_CLI_VERSION = (0, 159, 1)
 API_KEY_ENV = "CODEX_API_KEY"  # read by ``codex exec`` (codex-rs/login)
 
 # Environment variables passed through to the Codex process. Nothing else is
@@ -147,6 +152,7 @@ class SubprocessRunner:
                 stderr=asyncio.subprocess.PIPE,
                 env=dict(env),
                 cwd=cwd,
+                start_new_session=True,  # own process group: a kill reaches sandbox helpers
             )
         except FileNotFoundError:
             raise BrainError(
@@ -158,19 +164,34 @@ class SubprocessRunner:
             async with asyncio.timeout(timeout_s):
                 out, err = await proc.communicate(stdin.encode("utf-8"))
         except TimeoutError:
-            with contextlib.suppress(ProcessLookupError):
-                proc.kill()
+            _kill_group(proc)
             await proc.wait()
             raise BrainTimeoutError(f"Codex did not answer within {timeout_s:g} s") from None
         except asyncio.CancelledError:
-            with contextlib.suppress(ProcessLookupError):
-                proc.kill()
+            _kill_group(proc)
+            with contextlib.suppress(asyncio.CancelledError):
+                await asyncio.shield(proc.wait())
             raise
         return ProcessResult(
             returncode=proc.returncode if proc.returncode is not None else -1,
             stdout=out.decode("utf-8", errors="replace"),
             stderr=err.decode("utf-8", errors="replace"),
         )
+
+
+def _kill_group(proc: asyncio.subprocess.Process) -> None:
+    """SIGKILL the process and everything it started (shell commands, sandbox helpers)."""
+    try:
+        os.killpg(proc.pid, signal.SIGKILL)
+    except (ProcessLookupError, PermissionError):
+        with contextlib.suppress(ProcessLookupError):
+            proc.kill()
+
+
+def parse_version(text: str) -> tuple[int, int, int] | None:
+    """``codex-cli 0.159.1`` -> ``(0, 159, 1)``; None when there is no version."""
+    m = re.search(r"(\d+)\.(\d+)\.(\d+)", text)
+    return (int(m[1]), int(m[2]), int(m[3])) if m else None
 
 
 # --- command line --------------------------------------------------------------------
@@ -391,9 +412,11 @@ class CodexBrain:
         return self._tools.root
 
     async def start(self, meeting_dir: Path) -> None:
-        """Bind to the meeting folder and load the transcript so far. No API call."""
+        """Check the CLI version, bind to the meeting folder, load the transcript. No API call."""
         s = self.settings
-        self._tools = MeetingTools(meeting_dir)
+        tools = MeetingTools(meeting_dir)
+        await self._check_version(tools.root)
+        self._tools = tools
         system = self._prompt.system_prompt(s.user_name, s.aliases, s.allowed_topics, s.level)
         self._prefix = self._prompt.prefix_builder(self._tools.root, system)
         self._transcript_offset = 0
@@ -416,6 +439,18 @@ class CodexBrain:
         """Nothing to release: each answer's process has already exited."""
 
     # --- internals -------------------------------------------------------------------
+
+    async def _check_version(self, cwd: Path) -> None:
+        """Fail closed on a CLI too old for the permission profile (see MIN_CLI_VERSION)."""
+        argv = [*self.settings.executable, "--version"]
+        result = await self._runner.run(
+            argv, stdin="", env=process_env(None), cwd=cwd, timeout_s=self.settings.timeout_s
+        )
+        version = parse_version(result.stdout) if result.returncode == 0 else None
+        if version is None or version < MIN_CLI_VERSION:
+            found = result.stdout.strip() or result.stderr.strip() or "unknown"
+            need = ".".join(map(str, MIN_CLI_VERSION))
+            raise BrainError(f"Codex CLI {need} or newer is required (found: {found[:100]})")
 
     def _require_prefix(self) -> PrefixSource:
         if self._prefix is None:

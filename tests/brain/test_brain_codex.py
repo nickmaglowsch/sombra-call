@@ -9,7 +9,9 @@ from __future__ import annotations
 
 import asyncio
 import json
+import os
 import sys
+import time
 import tomllib
 from collections.abc import Mapping, Sequence
 from datetime import datetime
@@ -40,6 +42,7 @@ from sombra.brain.codex import (
     build_argv,
     flatten_request,
     parse_events,
+    parse_version,
     process_env,
     sandbox_args,
     toml_str,
@@ -122,6 +125,8 @@ class FakeCodex:
         self.outputs = list(outputs)
         self.calls: list[Call] = []
         self.delay = 0.0
+        self.version = ProcessResult(0, "codex-cli 0.159.1\n", "")
+        self.version_checks = 0
 
     async def run(
         self,
@@ -132,6 +137,9 @@ class FakeCodex:
         cwd: Path,
         timeout_s: float,
     ) -> ProcessResult:
+        if list(argv[-1:]) == ["--version"]:
+            self.version_checks += 1
+            return self.version
         self.calls.append(Call(argv, stdin, env, cwd, timeout_s))
         if self.delay:
             await asyncio.sleep(self.delay)
@@ -608,12 +616,18 @@ async def test_deadline_covers_the_whole_answer(meeting: Path) -> None:
 # --- a real process: SubprocessRunner against a fake ``codex`` script -----------------------
 
 FAKE_CODEX = r"""
-import json, os, sys, time
+import json, os, subprocess, sys, time
+if sys.argv[1:] == ["--version"]:
+    print("codex-cli 0.160.0")
+    sys.exit(0)
 data = {"argv": sys.argv[1:], "stdin": sys.stdin.read(), "env": dict(os.environ),
         "cwd": os.getcwd()}
 with open(sys.argv[0] + ".log", "w", encoding="utf-8") as f:
     json.dump(data, f)
 if "SLEEP" in data["stdin"]:
+    child = subprocess.Popen([sys.executable, "-c", "import time; time.sleep(60)"])
+    with open(sys.argv[0] + ".child", "w", encoding="utf-8") as f:
+        f.write(str(child.pid))
     time.sleep(30)
 if "FAIL" in data["stdin"]:
     print("error: boom", file=sys.stderr)
@@ -670,13 +684,61 @@ async def test_subprocess_runner_reports_exit_and_stderr(meeting: Path, fake_exe
     assert "boom" in result.stderr
 
 
+def _alive(pid: int) -> bool:
+    try:
+        os.kill(pid, 0)
+    except ProcessLookupError:
+        return False
+    return True
+
+
+def _child_pid(fake_exe: Path) -> int:
+    return int(Path(str(fake_exe) + ".child").read_text(encoding="utf-8"))
+
+
 @pytest.mark.slow
-async def test_subprocess_runner_kills_on_timeout(meeting: Path, fake_exe: Path) -> None:
+async def test_subprocess_runner_kills_the_whole_group_on_timeout(
+    meeting: Path, fake_exe: Path
+) -> None:
     runner = SubprocessRunner()
+    t = time.monotonic()
     with pytest.raises(BrainTimeoutError):
         await runner.run(
-            [sys.executable, str(fake_exe)], stdin="SLEEP", env={}, cwd=meeting, timeout_s=1.0
+            [sys.executable, str(fake_exe)], stdin="SLEEP", env={}, cwd=meeting, timeout_s=1.5
         )
+    # Without the group kill, the orphan holds the pipes and this waits ~60 s.
+    assert time.monotonic() - t < 10
+    child = _child_pid(fake_exe)
+    for _ in range(50):  # SIGKILL is async; the orphan is reaped by init
+        if not _alive(child):
+            break
+        await asyncio.sleep(0.05)
+    assert not _alive(child), "a process started by codex outlived the timeout"
+
+
+@pytest.mark.slow
+async def test_subprocess_runner_kills_the_group_on_cancel(meeting: Path, fake_exe: Path) -> None:
+    runner = SubprocessRunner()
+    task = asyncio.create_task(
+        runner.run(
+            [sys.executable, str(fake_exe)], stdin="SLEEP", env={}, cwd=meeting, timeout_s=30
+        )
+    )
+    for _ in range(100):
+        await asyncio.sleep(0.05)
+        if Path(str(fake_exe) + ".child").exists():  # noqa: ASYNC240 - polling a tmp file
+            break
+    t = time.monotonic()
+    task.cancel()
+    with pytest.raises(asyncio.CancelledError):
+        await task
+    assert time.monotonic() - t < 10
+    child = _child_pid(fake_exe)
+    for _ in range(50):
+        if not _alive(child):
+            break
+        await asyncio.sleep(0.05)
+    assert not _alive(child)
 
 
 async def test_subprocess_runner_missing_binary(meeting: Path) -> None:
@@ -685,6 +747,40 @@ async def test_subprocess_runner_missing_binary(meeting: Path) -> None:
         await runner.run(["/nonexistent/codex-cli"], stdin="", env={}, cwd=meeting, timeout_s=5)
     with pytest.raises(BrainError, match="could not start"):
         await runner.run([str(meeting)], stdin="", env={}, cwd=meeting, timeout_s=5)
+
+
+@pytest.mark.parametrize(
+    "result",
+    [
+        ProcessResult(0, "codex-cli 0.158.9\n", ""),
+        ProcessResult(0, "codex-cli dev\n", ""),
+        ProcessResult(2, "", "error: unexpected argument"),
+    ],
+)
+async def test_old_or_unknown_cli_is_refused(meeting: Path, result: ProcessResult) -> None:
+    fake = FakeCodex()
+    fake.version = result
+    brain = CodexBrain(settings(), fake)
+    with pytest.raises(BrainError, match=r"0\.159\.1 or newer"):
+        await brain.start(meeting)
+    with pytest.raises(BrainError, match="not started"):
+        await brain.answer(BrainRequest(trigger()))
+    assert fake.calls == []
+
+
+async def test_version_is_checked_once_per_start(meeting: Path) -> None:
+    fake = FakeCodex()
+    fake.version = ProcessResult(0, "codex-cli 1.0.0", "")
+    brain = await started(meeting, fake)
+    await brain.answer(BrainRequest(trigger()))
+    await brain.answer(BrainRequest(trigger()))
+    assert fake.version_checks == 1
+
+
+def test_parse_version() -> None:
+    assert parse_version("codex-cli 0.159.1") == (0, 159, 1)
+    assert parse_version("codex-cli 0.160.0-alpha.2\n") == (0, 160, 0)
+    assert parse_version("codex") is None
 
 
 def test_default_prompt_kit_is_brain_prompt() -> None:
