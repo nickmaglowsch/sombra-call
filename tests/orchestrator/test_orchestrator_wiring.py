@@ -20,12 +20,9 @@ from sombra.contracts import (
     AutonomyLevel,
     BrainRequest,
     Channel,
-    FrameMarker,
-    FrameRecord,
     SpeechLine,
     Suggestion,
     TriggerEvent,
-    TriggerLogged,
     Usage,
 )
 from sombra.orchestrator.live import (
@@ -41,7 +38,6 @@ from sombra.orchestrator.wiring import (
     Assembly,
     NoBrain,
     NoTrigger,
-    OneMarkerStore,
     PauseAdapter,
     SilentUI,
     SummaryHooks,
@@ -173,24 +169,6 @@ async def test_level_zero_stand_ins() -> None:
 
 def _meeting(tmp_path: Path) -> Path:
     return create_meeting(tmp_path, "Planejamento", started_at=T0)
-
-
-def test_one_marker_store_writes_each_tela_line_once(tmp_path: Path) -> None:
-    meeting = _meeting(tmp_path)
-    inner = MeetingStore(meeting, started_at=T0)
-    store = OneMarkerStore(inner)
-    record = FrameRecord("f0001", T0, "frames/f0001.jpg", 10, 10, "zoom.us", "Slide", 64.0, "0")
-    store.append_frame(record)
-    store.append_entry(FrameMarker(T0, "f0001", "Slide"))  # the session's echo: dropped
-    store.append_entry(FrameMarker(T0, "f0001", "Slide"))  # a later, real re-mark: kept
-    store.append_entry(SpeechLine(T0, Channel.OTHERS, "olha esse slide"))
-    store.log(TriggerLogged("t", T0, T0, "q", "Mariana", 0.9, False))
-    assert store.meeting_dir == meeting
-    assert len(store.entries_since(T0 - timedelta(seconds=1))) == 3
-    inner.close()
-    lines = (meeting / "transcript.md").read_text().splitlines()
-    assert lines.count('[14:30:00] TELA f0001 "Slide"') == 2
-    assert len((meeting / "log.jsonl").read_text().splitlines()) == 1
 
 
 class FakeModel:
