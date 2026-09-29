@@ -190,8 +190,9 @@ class _Generator:
     def __init__(self, model: TextModel, context_tokens: int, max_tokens: int) -> None:
         self.model = model
         self.max_tokens = max_tokens
-        # Room for the system prompt and the answer.
-        self.budget = max(1_000, context_tokens - max_tokens - 2_000)
+        # Room for the system prompt and the answer, and a 25% margin because
+        # CHARS_PER_TOKEN is an estimate, not a bound.
+        self.budget = max(1_000, int((context_tokens - max_tokens - 2_000) * 0.75))
         self.usages: list[Usage] = []
 
     def _call(self, system: str, user: str) -> Minutes:

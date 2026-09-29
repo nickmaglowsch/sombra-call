@@ -49,9 +49,9 @@ uv run sombra minutes 2026-09-29_1430_daily-time-x --model claude-haiku-4-5
 ```
 
 - Model: `claude-haiku-4-5` by default (cheap; minutes are not on the latency path), `--model` to change it.
-- API key: read from the OS keychain (macOS Keychain / Linux Secret Service) with `keyring`, service `sombra`, user `anthropic-api-key` (`keyring set sombra anthropic-api-key`). If none is stored, the `ANTHROPIC_API_KEY` environment variable is used. Keys never go in config files.
+- API key: read from the OS keychain (macOS Keychain / Linux Secret Service) with `keyring`, service `sombra`, user `anthropic-api-key` (`keyring set sombra anthropic-api-key`). If none is stored, the `ANTHROPIC_API_KEY` environment variable is used; that fallback is a **dev-only convenience** (manual `network` tests, machines without a keychain backend), not the supported setup. Keys never go in config files or logs.
 - Exit codes: 0 written, 1 API or parse failure, 2 no `transcript.md`.
 
 ## The `TextModel` port
 
-`summary` does not import `brain`. It calls `TextModel.complete(system, user, max_tokens) -> (text, Usage)`; `AnthropicTextModel(api_key=callable, model=...)` is the Messages API implementation. Meeting content goes only in the user turn, inside `<transcricao>`/`<resumo_anterior>`/`<parciais>` tags, and the system prompt tells the model it is data, not instructions.
+`summary` does not import `brain`. It calls `TextModel.complete(system, user, max_tokens) -> (text, Usage)`; `AnthropicTextModel(api_key=callable, model=...)` is the Messages API implementation. Meeting content goes only in the user turn, inside `<transcricao>`/`<resumo_anterior>`/`<parciais>` tags, and the system prompt tells the model it is data, not instructions. Any `<transcricao>`, `<resumo_anterior>` or `<parciais>` tag inside the content (any case or spacing) is rewritten to `‹…›` first, so meeting content cannot close the fence.

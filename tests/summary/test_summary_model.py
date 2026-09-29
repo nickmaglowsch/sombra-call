@@ -85,3 +85,10 @@ def test_default_model_and_real_client_construction() -> None:
 def test_add_usage() -> None:
     assert add_usage([Usage(1, 2, 3, 4), Usage(10, 20, 30, 40)]) == Usage(11, 22, 33, 44)
     assert add_usage([]) == Usage()
+
+
+def test_truncated_output_raises() -> None:
+    client = _Client(_Response([_Block("text", '{"resumo": "cort')], stop_reason="max_tokens"))
+    model = AnthropicTextModel(lambda: "k", client_factory=lambda k: client)
+    with pytest.raises(RuntimeError, match="truncated"):
+        model.complete("s", "u", 10)

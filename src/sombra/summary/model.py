@@ -86,6 +86,9 @@ class AnthropicTextModel:
         )
         if response.stop_reason == "refusal":
             raise RuntimeError(f"model {self._model} refused the summary request")
+        if response.stop_reason == "max_tokens":
+            # A cut-off summary must not reach the prompt prefix, nor half-JSON the parser.
+            raise RuntimeError(f"model {self._model} output truncated at max_tokens={max_tokens}")
         text = "".join(b.text for b in response.content if b.type == "text")
         u = response.usage
         usage = Usage(

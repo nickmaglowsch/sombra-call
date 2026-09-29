@@ -6,6 +6,7 @@ See docs/summary.md for the key lookup (OS keychain, then ``ANTHROPIC_API_KEY``)
 from __future__ import annotations
 
 import argparse
+import logging
 import os
 import sys
 from pathlib import Path
@@ -13,6 +14,8 @@ from pathlib import Path
 DEFAULT_ROOT = Path("~/Sombra/meetings")
 KEYRING_SERVICE = "sombra"
 KEYRING_USER = "anthropic-api-key"
+
+log = logging.getLogger(__name__)
 
 
 def register(subparsers: argparse._SubParsersAction[argparse.ArgumentParser]) -> None:
@@ -32,12 +35,17 @@ def resolve_meeting(meeting: str, root: Path = DEFAULT_ROOT) -> Path:
 
 
 def api_key() -> str:
-    """Anthropic key from the OS keychain (Keychain / Secret Service), else the env."""
+    """Anthropic key from the OS keychain (Keychain / Secret Service).
+
+    ``ANTHROPIC_API_KEY`` is a dev-only fallback (manual ``network`` tests, machines
+    without a keychain backend); it is never read from or written to a file.
+    """
     try:
         import keyring
 
         key = keyring.get_password(KEYRING_SERVICE, KEYRING_USER)
-    except Exception:  # keyring missing or no backend: fall back to env
+    except Exception as e:  # keyring missing, locked or no backend: fall back to env
+        log.debug("keychain lookup failed: %r", e)
         key = None
     key = key or os.environ.get("ANTHROPIC_API_KEY")
     if not key:
