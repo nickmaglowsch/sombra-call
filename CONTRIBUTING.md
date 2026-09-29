@@ -7,8 +7,10 @@ A PR merges only when every gate below passes. Gates 1–2 are enforced by CI; g
 1. Pick one open issue. Comment that you are taking it, or check the assignee.
 2. Branch from `main`: `issue-<number>-<short-name>`.
 3. One issue per PR. If you find more work, open a new issue instead of widening the PR.
-4. Open the PR with `Closes #<number>` in the description and fill in the template.
-5. Keep the PR green and conflict-free until it merges.
+4. Open the PR with `Closes #<number>` in the description and fill in the template. If the PR cannot finish the issue (for example the remaining step needs real hardware), use `Refs #<number>` and say exactly what is left.
+5. CLI commands go in `src/sombra/<package>/commands.py` (`register(subparsers)`, see `sombra/cli.py`), never in `cli.py` itself.
+6. On a conflict in `uv.lock`, take `main`'s version and run `uv lock`; never edit the lock by hand.
+7. Keep the PR green and conflict-free until it merges.
 
 ## Gate 1: CI is green (automated)
 
