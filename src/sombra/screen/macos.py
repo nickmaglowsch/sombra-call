@@ -170,13 +170,22 @@ def frontmost_window(windows: Sequence[WindowInfo]) -> WindowInfo | None:
 
 
 def match_window(windows: Sequence[WindowInfo], selector: WindowSelector) -> WindowInfo:
-    """The window the selector picks: frontmost on-screen match first, then any match."""
+    """The frontmost on-screen window the selector picks.
+
+    Covered windows count as on screen. Minimised windows and windows on another Space
+    do not: they cannot be captured, so they raise instead of yielding a blank frame.
+    """
     candidates = [w for w in capturable_windows(windows) if selector.matches(w)]
     if not candidates:
         raise WindowNotFoundError(
             f"no window matches {selector.describe()}; run `sombra windows` to list them"
         )
-    return next((w for w in candidates if w.on_screen), candidates[0])
+    visible = next((w for w in candidates if w.on_screen), None)
+    if visible is None:
+        raise WindowNotFoundError(
+            f"the window matching {selector.describe()} is minimised or on another Space"
+        )
+    return visible
 
 
 # --- platform backends -----------------------------------------------------------------
@@ -386,6 +395,7 @@ class MacScreenSource:
     ``mode=DISPLAY`` captures monitor ``display`` (0 = main). ``mode=WINDOW`` captures
     only the window ``selector`` picks; it is resolved once, followed by id while it
     lives (its title may change, e.g. a browser tab), and re-matched if it is closed.
+    While it is minimised or on another Space, ``grab()`` raises ``WindowNotFoundError``.
 
     On the first grab without Screen Recording permission the system prompt is shown
     once; every grab without it raises ``ScreenPermissionError``.
@@ -435,6 +445,10 @@ class MacScreenSource:
         if self._window_id is not None:
             same = next((w for w in windows if w.id == self._window_id), None)
             if same is not None:
+                if not same.on_screen:  # keep following it once it is restored
+                    raise WindowNotFoundError(
+                        f"window {same.id} is minimised or on another Space; not capturing"
+                    )
                 return same
         chosen = match_window(windows, self.selector)
         self._window_id = chosen.id

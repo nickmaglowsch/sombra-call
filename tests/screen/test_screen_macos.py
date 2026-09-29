@@ -156,7 +156,6 @@ def test_capturable_windows_drops_system_and_overlay_layers() -> None:
         (WindowSelector(title="roadmap"), 11),
         (WindowSelector(app="Google Chrome"), 11),  # frontmost of several matches
         (WindowSelector(app="Google Chrome", title="jira"), 12),
-        (WindowSelector(app="Slack"), 13),  # off-screen still matches when it is the only one
     ],
 )
 def test_match_window(selector: WindowSelector, expected: int) -> None:
@@ -182,6 +181,24 @@ def test_match_prefers_on_screen_over_front_hidden() -> None:
 def test_match_window_not_found(selector: WindowSelector) -> None:
     with pytest.raises(WindowNotFoundError, match="sombra windows"):
         match_window(parse_window_list(DESKTOP), selector)
+
+
+def test_match_window_off_screen_only_raises() -> None:
+    # Slack is minimised / on another Space: capturing it would give a blank frame.
+    with pytest.raises(WindowNotFoundError, match="minimised or on another Space"):
+        match_window(parse_window_list(DESKTOP), WindowSelector(app="Slack"))
+
+
+async def test_window_mode_pauses_while_window_is_minimised() -> None:
+    backend = FakeBackend()
+    src = source(backend, mode="window", selector=WindowSelector(app="zoom.us"))
+    await src.grab()
+    backend.windows = [raw(10, "zoom.us", "Zoom Meeting", on_screen=False), *DESKTOP[3:]]
+    with pytest.raises(WindowNotFoundError, match="minimised"):
+        await src.grab()
+    backend.windows = list(DESKTOP)
+    await src.grab()
+    assert backend.captured == [("window", 10), ("window", 10)]
 
 
 def test_title_match_never_hits_untitled_windows() -> None:
@@ -385,9 +402,9 @@ def test_cli_backend_failure(code: int, write: bytes | None) -> None:
 async def test_source_works_with_cli_backend() -> None:
     runner = FakeRunner()
     src = MacScreenSource(
-        "window", selector=WindowSelector(app="Slack"), backend=cli_backend(runner)
+        "window", selector=WindowSelector(title="Jira"), backend=cli_backend(runner)
     )
     shot = await src.grab()
     assert shot.image == b"\x89PNG cli"
-    assert (shot.app, shot.window_title) == ("Slack", "general")
+    assert (shot.app, shot.window_title) == ("Google Chrome", "Jira - Sprint 42")
     assert shot.ts.tzinfo is not None

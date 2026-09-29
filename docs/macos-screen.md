@@ -41,7 +41,7 @@ How it behaves:
 - The window is captured on its own, even when other windows cover it. Nothing from the rest of the screen gets into the frame.
 - If several windows match, the frontmost visible one wins. Once chosen, Sombra follows that window while it exists, even if its title changes (for example, when you switch browser tabs).
 - If the window closes, Sombra looks for a match again on the next capture. If none matches, the capture fails with `WindowNotFoundError`. It never falls back to the full display.
-- A minimised window cannot be captured.
+- A minimised window, or one on another Space, cannot be captured: while it is, each capture fails with `WindowNotFoundError` (no frame is saved) and capture resumes when the window is back.
 
 ## Backends and cost
 

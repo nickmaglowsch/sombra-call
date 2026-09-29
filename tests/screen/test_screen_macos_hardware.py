@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import asyncio
 import os
+import resource
 import statistics
 import subprocess
 import sys
@@ -113,15 +114,21 @@ def test_grab_latency_and_loop_cpu() -> None:
         latencies.append((time.perf_counter() - t) * 1000)
     p50 = statistics.median(latencies)
 
-    wall0, cpu0 = time.monotonic(), time.process_time()
+    def cpu_seconds() -> float:
+        # Own process plus child processes (the screencapture fallback spawns one per shot).
+        children = resource.getrusage(resource.RUSAGE_CHILDREN)
+        return time.process_time() + children.ru_utime + children.ru_stime
+
+    wall0, cpu0 = time.monotonic(), cpu_seconds()
     deadline = wall0 + min(SECONDS, 120)
     while time.monotonic() < deadline:
         asyncio.run(src.grab())
         time.sleep(INTERVAL)
-    cpu_pct = 100 * (time.process_time() - cpu0) / (time.monotonic() - wall0)
+    cpu_pct = 100 * (cpu_seconds() - cpu0) / (time.monotonic() - wall0)
 
     sys.stderr.write(
         f"\ngrab p50={p50:.1f} ms max={max(latencies):.1f} ms; loop CPU {cpu_pct:.2f}%\n"
     )
+    # replayd/WindowServer work on our behalf is not counted; check Activity Monitor too.
     assert p50 < 100
     assert cpu_pct < 3
