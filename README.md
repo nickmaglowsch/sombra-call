@@ -82,6 +82,8 @@ make fmt     # auto-fix lint and formatting
 uv run sombra --version
 ```
 
+Configuration (user config, profiles, `sombra new`, `sombra profiles list`) is documented in [`docs/config.md`](docs/config.md).
+
 Tests that need real devices, models, OS permissions or a real API are marked `hardware` or `network` and are skipped by default. Run them explicitly: `uv run pytest -m hardware`.
 
 ## Contributing
