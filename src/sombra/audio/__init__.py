@@ -10,7 +10,11 @@ Separate channels give "EU vs. OUTROS" without diarization. Implements
   tests and the replay harness.
 
 Every chunk is 16 kHz mono float32, 20-100 ms long, stamped from one monotonic clock.
-Reconnect after device loss (A3) is out of scope here.
+
+Reconnect (A3): :class:`sombra.audio.reconnect.ReconnectSupervisor` restarts a channel
+whose device goes away, and ``MacAudioSource(on_status=...)`` reports each
+:class:`sombra.audio.reconnect.SourceStatus` (lost / retrying / restored) so the
+orchestrator can log it and show it in the UI.
 """
 
 from __future__ import annotations

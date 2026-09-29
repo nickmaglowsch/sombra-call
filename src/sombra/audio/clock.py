@@ -58,15 +58,22 @@ class HostSyncedTimer:
         gain: float = 0.05,
         max_slew_ns: int = 500_000,
         resync_ns: int = 200_000_000,
+        floor_ns: int | None = None,
     ) -> None:
+        """``floor_ns``: stamps stay above it (the previous stream's last stamp)."""
         self.in_rate = in_rate
         self._gain = gain
         self._max_slew_ns = max_slew_ns
         self._resync_ns = resync_ns
         self._anchor_ns: int | None = None
         self._correction_ns = 0.0
-        self._last_stamp_ns: int | None = None
+        self._last_stamp_ns: int | None = floor_ns
+        self._floor_pending = floor_ns is not None
         self.resyncs = 0
+
+    @property
+    def last_stamp_ns(self) -> int | None:
+        return self._last_stamp_ns
 
     def observe(self, samples_in_total: int, host_ns: int) -> None:
         expected = samples_in_total * NS // self.in_rate
@@ -88,7 +95,16 @@ class HostSyncedTimer:
         if self._anchor_ns is None:
             raise RuntimeError("observe() must be called before stamp()")
         t = self._anchor_ns + out_index * NS // SAMPLE_RATE + round(self._correction_ns)
-        if self._last_stamp_ns is not None and t <= self._last_stamp_ns:
+        if self._floor_pending:
+            # First chunk of a reopened stream: never at or before the previous stream's
+            # last stamp. Shift the correction (not just this stamp) so the next chunks keep
+            # natural spacing; observe() then slews it back towards the host clock.
+            self._floor_pending = False
+            start = (self._last_stamp_ns or 0) + NS // SAMPLE_RATE
+            if t < start:
+                self._correction_ns += start - t
+                t = start
+        elif self._last_stamp_ns is not None and t <= self._last_stamp_ns:
             t = self._last_stamp_ns + 1
         self._last_stamp_ns = t
         return t

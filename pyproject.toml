@@ -6,10 +6,13 @@ readme = "README.md"
 requires-python = ">=3.12"
 license = { text = "Proprietary" }
 dependencies = [
+    "aiohttp>=3.10",
     "anthropic>=1.9.0",
+    "keyring>=25.7.0",
     "numpy>=2.5.3",
     "onnxruntime>=1.30.0",
     "pillow>=12.3.0",
+    "pyobjc-framework-cocoa>=12.2.2 ; sys_platform == 'darwin'",
     "pyobjc-framework-coreaudio>=10.3 ; sys_platform == 'darwin'",
     "pyobjc-framework-quartz>=10.3 ; sys_platform == 'darwin'",
     "pyobjc-framework-screencapturekit>=10.3 ; sys_platform == 'darwin'",
@@ -20,6 +23,11 @@ dependencies = [
 
 [project.scripts]
 sombra = "sombra.cli:main"
+
+[project.optional-dependencies]
+window = [
+    "pywebview>=5.0",
+]
 
 [dependency-groups]
 dev = [
