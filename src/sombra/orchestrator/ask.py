@@ -16,6 +16,7 @@ metric. Logging Q&A needs its own event type (a contract change, proposed on #20
 
 from __future__ import annotations
 
+import dataclasses
 import os
 import time
 import tomllib
@@ -314,11 +315,5 @@ async def ask(
         await brain.close()
     if not frames:
         # The gate stripped any image; do not report frames the model never saw.
-        response = BrainResponse(
-            text=response.text,
-            frames_sent=[],
-            backend=response.backend,
-            model=response.model,
-            usage=response.usage,
-        )
+        response = dataclasses.replace(response, frames_sent=[])
     return AskResult(meeting_dir, question, response, time.perf_counter() - started)

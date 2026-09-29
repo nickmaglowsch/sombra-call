@@ -215,6 +215,7 @@ def test_post_meeting_prompt_asks_for_timestamps_and_not_found() -> None:
     assert f'"{ASK_NOT_FOUND}"' in text
     assert "Nick (também chamado de Nico)" in text
     assert "<dados" in text  # meeting content is data
+    assert '<dados fonte="pergunta">) vem de Nick' in text  # the question is the user's
     assert "$" not in text  # every placeholder filled
     assert text != system_prompt("Nick", ["Nico"], ["roadmap"], AutonomyLevel.L2)
     assert "roadmap" not in text  # allowed topics do not apply after the meeting
