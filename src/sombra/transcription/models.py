@@ -2,7 +2,7 @@
 
 Models never go in git. ``ensure_model`` downloads a missing file to ``<name>.part``,
 hashes it while streaming, and moves it into place only when the digest matches, so a
-file in the cache is always a verified one. ``scripts/download_models.py`` is the CLI.
+file in the cache is always a verified one. ``sombra models`` (``commands.py``) is the CLI.
 """
 
 from __future__ import annotations

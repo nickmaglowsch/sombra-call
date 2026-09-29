@@ -71,6 +71,16 @@ docs/
 
 Read [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md) before writing code.
 
+## Install
+
+On macOS 14+ (Apple Silicon) or Ubuntu 22.04/24.04:
+
+```sh
+curl -fsSL https://github.com/nickmaglowsch/sombra-call/releases/latest/download/install.sh | sh
+```
+
+It installs uv (if missing) and Sombra on a uv-managed Python 3.12, downloads the local models, writes `~/.config/sombra/config.toml` and runs `sombra doctor`, which lists what is still needed (permissions, API keys). Re-run it to upgrade; `--uninstall` removes it and never touches `~/Sombra/meetings`. On Ubuntu, live capture is not built yet. Options and details: [`docs/install.md`](docs/install.md).
+
 ## Development
 
 Requirements: [uv](https://docs.astral.sh/uv/) (it installs Python 3.12 for you). macOS modules also need Xcode command-line tools.

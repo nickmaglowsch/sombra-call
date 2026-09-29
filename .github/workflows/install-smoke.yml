@@ -1,0 +1,119 @@
+name: install-smoke
+
+# Installs the wheel built from this commit with scripts/install.sh on a clean runner,
+# upgrades it in place, then uninstalls it. Not a required check (see CONTRIBUTING.md).
+
+on:
+  pull_request:
+    paths:
+      - scripts/install.sh
+      - .github/workflows/install-smoke.yml
+      - src/sombra/config/**
+      - src/sombra/transcription/commands.py
+      - src/sombra/transcription/models.py
+      - pyproject.toml
+  push:
+    branches: [main]
+    paths:
+      - scripts/install.sh
+      - .github/workflows/install-smoke.yml
+      - src/sombra/config/**
+      - src/sombra/transcription/commands.py
+      - src/sombra/transcription/models.py
+      - pyproject.toml
+  workflow_dispatch:
+
+concurrency:
+  group: install-smoke-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  smoke:
+    name: install-smoke (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 30
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-14]
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install shellcheck
+        run: |
+          if [ "$RUNNER_OS" = macOS ]; then brew install shellcheck; else sudo apt-get install -y shellcheck; fi
+
+      - name: shellcheck scripts/install.sh
+        run: shellcheck --shell=sh scripts/install.sh
+
+      # Build with a throwaway uv, then hide it so the installer bootstraps its own.
+      - uses: astral-sh/setup-uv@v6
+      - name: Build the wheel
+        run: uv build --wheel --out-dir dist
+
+      - name: Install (fresh; the installer installs uv itself)
+        run: |
+          set -eu
+          uv_dir="$(dirname "$(command -v uv)")"
+          PATH="$(printf '%s' "$PATH" | tr ':' '\n' | grep -vxF "$uv_dir" | paste -sd: -)"
+          export PATH
+          if command -v uv; then echo "note: runner has another uv on PATH; the installer will use it"; fi
+          sh scripts/install.sh --from-wheel dist/*.whl --yes --no-models
+          echo "$HOME/.local/bin" >> "$GITHUB_PATH"  # uv's default tool bin directory
+
+      - name: sombra --version
+        run: sombra --version
+
+      - name: sombra doctor --json
+        run: |
+          set -u
+          # Exit 1 is expected here: --no-models leaves the models missing (a FAIL).
+          sombra doctor --json > doctor.json && code=0 || code=$?
+          cat doctor.json
+          test "$code" -le 1
+          python3 - <<'EOF'
+          import json
+          data = json.load(open("doctor.json"))
+          names = {c["name"]: c for c in data["checks"]}
+          assert names["sombra"]["status"] == "ok", names["sombra"]
+          assert names["python"]["detail"].startswith("Python 3.12"), names["python"]
+          fails = [c for c in data["checks"] if c["status"] == "fail"]
+          unexpected = [c for c in fails if not c["name"].startswith("model ")]
+          assert not unexpected, unexpected
+          EOF
+
+      - name: sombra doctor (text)
+        run: sombra doctor || true
+
+      - name: Config written and kept on re-run
+        run: |
+          set -eu
+          cfg="$(sombra config path)"
+          test -f "$cfg"
+          echo 'autonomy_level = "L2"  # user edit' >> "$cfg"
+          cp "$cfg" cfg.before
+
+      - name: Upgrade (re-run the installer)
+        run: sh scripts/install.sh --from-wheel dist/*.whl --yes --no-models
+
+      - name: Check the upgrade
+        run: |
+          set -eu
+          sombra --version
+          cmp "$(sombra config path)" cfg.before
+          sombra models list
+
+      - name: Uninstall keeps meetings
+        run: |
+          set -eu
+          mkdir -p ~/Sombra/meetings/2026-01-01_0900_smoke
+          echo "[09:00:00] EU: teste" > ~/Sombra/meetings/2026-01-01_0900_smoke/transcript.md
+          mkdir -p "$(sombra models path)"
+          touch "$(sombra models path)/placeholder.bin"
+          sh scripts/install.sh --uninstall --yes
+          if command -v sombra; then echo "sombra still installed"; exit 1; fi
+          test -f ~/Sombra/meetings/2026-01-01_0900_smoke/transcript.md
+          test ! -e ~/.cache/sombra/models
