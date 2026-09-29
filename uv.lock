@@ -2197,7 +2197,6 @@ wheels = [
 
 [[package]]
 name = "sombra"
-version = "0.0.1"
 source = { editable = "." }
 dependencies = [
     { name = "aiohttp" },
