@@ -11,7 +11,7 @@ from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
 import pytest
-from PIL import Image, ImageDraw
+from PIL import Image, ImageDraw, UnidentifiedImageError
 
 from sombra.contracts import FramePipeline, FrameRecord, Screenshot, to_json_line
 from sombra.screen.pipeline import (
@@ -433,6 +433,29 @@ def test_resume_tolerates_malformed_index_lines(tmp_path: Path) -> None:
     assert p.next_frame_id == "f0003"
     rec = p.process(shot(slide(1)))  # bad phash on the last record: no reference, kept
     assert rec is not None and rec.id == "f0003"
+
+
+def test_failed_write_leaves_no_partial_frame(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    def boom(*_args: object, **_kwargs: object) -> None:
+        raise OSError("disk full")
+
+    p = DedupeFramePipeline(tmp_path)
+    s = shot(slide(1))
+    monkeypatch.setattr(Image.Image, "save", boom)
+    with pytest.raises(OSError, match="disk full"):
+        p.process(s)
+    assert list((tmp_path / "frames").iterdir()) == []
+    monkeypatch.undo()
+    rec = p.process(s)  # the failed shot did not become the dedupe reference
+    assert rec is not None
+
+
+def test_undecodable_image_raises(tmp_path: Path) -> None:
+    bad = Screenshot(ts=T0, image=b"not a png", app=None, window_title=None)
+    with pytest.raises(UnidentifiedImageError):
+        DedupeFramePipeline(tmp_path).process(bad)
 
 
 def test_empty_meeting_starts_at_one(tmp_path: Path) -> None:

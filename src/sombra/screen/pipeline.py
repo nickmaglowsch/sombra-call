@@ -73,6 +73,9 @@ class DedupeFramePipeline:
     ``skip`` is an optional hook the orchestrator uses for blocked apps and pause: a
     screenshot for which it returns ``True`` is dropped before any decoding and does
     not become the reference for later dedupe.
+
+    ``process`` raises on an undecodable image (``PIL.UnidentifiedImageError``) or a failed
+    write (``OSError``). The caller catches these so capture keeps running.
     """
 
     def __init__(
@@ -143,11 +146,16 @@ class DedupeFramePipeline:
             rel = f"frames/{frame_id}.{_EXT[self.image_format]}"
             path = self.meeting_dir / rel
             try:
-                with path.open("xb") as fh:  # never overwrite a saved frame
-                    out.save(fh, format=self.image_format.upper(), quality=self.quality)
-                break
+                fh = path.open("xb")  # never overwrite a saved frame
             except FileExistsError:
                 continue
+            try:
+                with fh:
+                    out.save(fh, format=self.image_format.upper(), quality=self.quality)
+            except BaseException:
+                path.unlink(missing_ok=True)  # no empty or partial frame left behind
+                raise
+            break
         return FrameRecord(
             id=frame_id,
             ts=shot.ts,
