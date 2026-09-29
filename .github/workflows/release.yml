@@ -83,6 +83,7 @@ jobs:
     name: smoke (${{ matrix.os }})
     needs: build
     runs-on: ${{ matrix.os }}
+    timeout-minutes: 20
     strategy:
       fail-fast: false
       matrix:
@@ -130,7 +131,41 @@ jobs:
           dir=$(sombra new "Release smoke")
           echo "$dir"
           test -d "$dir"
-      # TODO(#17): add `sombra replay` with the fake brain once the wiring PR merges.
+      # `sombra replay` runs the whole pipeline (VAD, whisper, dedupe, trigger, store) on the
+      # synthetic PT-BR e2e fixture, with the fake brain: no API key, no permissions.
+      # Only the fixture files are checked out, never the source.
+      - uses: actions/checkout@v4
+        with:
+          path: fixture-src
+          sparse-checkout: tests/fixtures/e2e
+          sparse-checkout-cone-mode: false
+      - name: Cache models (whisper tiny + Silero VAD)
+        uses: actions/cache@v4
+        with:
+          path: ~/.cache/sombra/models
+          key: release-smoke-models-${{ runner.os }}-${{ runner.arch }}-tiny-vad
+      - name: Download models with the installed tool
+        # TODO(#45): `sombra models download tiny` once the models command lands.
+        run: |
+          "$(uv tool dir)/sombra/bin/python" -c "
+          from sombra.transcription import SILERO_VAD, ensure_model, whisper_model
+          print(ensure_model(SILERO_VAD)); print(ensure_model(whisper_model('tiny')))"
+      - name: sombra replay (fake brain)
+        run: |
+          fx=fixture-src/tests/fixtures/e2e
+          out=$(sombra replay "$fx/me.wav" "$fx/others.wav" --frames "$fx/frames" \
+            --user Maria --fake-brain --auto-approve --stt-model tiny \
+            --name release-smoke --root "$RUNNER_TEMP/meetings")
+          echo "$out"
+          dir=$(echo "$out" | head -n 1)
+          test -s "$dir/transcript.md"
+          # The fixture calls Maria once: expect exactly trigger -> suggestion -> action.
+          "$(uv tool dir)/sombra/bin/python" -c "
+          import json, pathlib, sys
+          log = pathlib.Path(sys.argv[1], 'log.jsonl').read_text().splitlines()
+          types = [json.loads(line)['type'] for line in log]
+          print(types)
+          assert types == ['trigger', 'suggestion', 'action'], types" "$dir"
 
   publish:
     name: publish

@@ -22,7 +22,7 @@ Sombra ships as GitHub Releases, built by `.github/workflows/release.yml` when a
 
 3. Watch the **Release** workflow. It runs:
    - **build**: checks that the tagged commit is on `main` and builds the sdist and wheel once. It checks that their version is the tag's, adds `install.sh`, and writes and verifies `SHA256SUMS`.
-   - **smoke**: on clean `macos-14`, `ubuntu-latest`, `ubuntu-22.04` and `ubuntu-24.04-arm` runners, it verifies `SHA256SUMS` with the stock tool. It then installs the wheel as users do: `install.sh --from-wheel` once #45 lands, `uv tool install` on a uv-managed CPython 3.12 until then. Finally it runs `sombra --version` (which must print the tag's version), `sombra --help` and `sombra new`.
+   - **smoke**: on clean `macos-14`, `ubuntu-latest`, `ubuntu-22.04` and `ubuntu-24.04-arm` runners, it verifies `SHA256SUMS` with the stock tool. It then installs the wheel as users do: `install.sh --from-wheel` once #45 lands, `uv tool install` on a uv-managed CPython 3.12 until then. Finally it runs `sombra --version` (which must print the tag's version), `sombra --help`, `sombra new`, and `sombra replay` on the synthetic PT-BR e2e fixture with the fake brain and whisper `tiny`, which must log exactly one trigger, suggestion and approval.
    - **publish**: only when build and every smoke job pass. It creates the GitHub Release with the assets below and the release notes.
 4. If a job fails, nothing is published. Fix it on `main` through a PR, then tag the next patch or `-rcN`. Never move a published tag.
 
