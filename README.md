@@ -78,6 +78,7 @@ make setup   # uv sync
 make check   # lint + format check + mypy --strict + tests with coverage (what CI runs)
 make fmt     # auto-fix lint and formatting
 uv run sombra --version
+uv run sombra minutes <meeting>   # (re)generate the minutes; see docs/summary.md
 ```
 
 Tests that need real devices, models, OS permissions or a real API are marked `hardware` or `network` and are skipped by default. Run them explicitly: `uv run pytest -m hardware`.
