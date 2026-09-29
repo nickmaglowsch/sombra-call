@@ -45,9 +45,17 @@ async def _run(argv: Sequence[str], stdin: bytes | None = None) -> None:
             stdout=asyncio.subprocess.DEVNULL,
             stderr=asyncio.subprocess.DEVNULL,
         )
-        await asyncio.wait_for(proc.communicate(stdin), timeout=_TIMEOUT_S)
-    except (OSError, TimeoutError) as e:
+    except OSError as e:
         log.warning("%s failed: %s", argv[0], e)
+        return
+    try:
+        await asyncio.wait_for(proc.communicate(stdin), timeout=_TIMEOUT_S)
+    except TimeoutError:
+        log.warning("%s timed out", argv[0])
+    finally:
+        if proc.returncode is None:  # timed out or cancelled: do not leave it running
+            proc.kill()
+            await proc.wait()
 
 
 def _shorten(text: str) -> str:

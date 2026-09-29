@@ -12,6 +12,11 @@
   let cards = [];
   let editing = null; // {id, draft} while the inline editor is open
   let retryMs = 250;
+  // Shortcuts act on the newest suggestion. When that card changes, ignore keys for a
+  // moment so a keypress meant for the previous card cannot resolve one not yet read.
+  const ARM_DELAY_MS = 300;
+  let topId = null;
+  let armedAt = 0;
 
   function setStatus(state, text) {
     statusEl.dataset.state = state;
@@ -160,6 +165,11 @@
   function render() {
     if (editing && !cards.some((c) => c.id === editing.id)) editing = null;
     const top = cards.find((c) => c.kind === "suggestion");
+    const newTopId = top ? top.id : null;
+    if (newTopId !== topId) {
+      topId = newTopId;
+      armedAt = performance.now() + ARM_DELAY_MS;
+    }
     const nodes = cards.map((card) => {
       const node = el("section", `card ${card.kind}${top && card.id === top.id ? " top" : ""}`);
       node.dataset.cardId = card.id;
@@ -180,7 +190,9 @@
   }
 
   document.addEventListener("keydown", (ev) => {
+    if (ev.repeat) return; // holding a key must not work through the queue
     if (ev.target && ev.target.tagName === "TEXTAREA") return;
+    if (performance.now() < armedAt) return;
     if (ev.metaKey || ev.ctrlKey || ev.altKey) return;
     const top = cards.find((c) => c.kind === "suggestion");
     const key = ev.key.toLowerCase();

@@ -95,7 +95,7 @@ async def test_frames_route(server: OverlayServer, http: aiohttp.ClientSession) 
         assert await r.read() == b"\xff\xd8jpeg"
     async with http.get(f"{server.base_url}/frames/f0007.jpg{q}") as r:
         assert r.status == 200
-    for bad in ("f0008", "secret.txt", "..%2Fsecret.txt", "f12"):
+    for bad in ("f0008", "secret.txt", "..%2Fsecret.txt", "f12", "f0007%0A"):
         async with http.get(f"{server.base_url}/frames/{bad}{q}") as r:
             assert r.status == 404, bad
     async with http.get(f"{server.base_url}/frames/f0007") as r:
@@ -142,6 +142,13 @@ async def test_error_reply_and_dead_client_is_dropped(http: aiohttp.ClientSessio
         assert srv.client_count == 0
     finally:
         await srv.close()
+
+
+def test_shortcuts_ignore_key_repeat_and_new_top_card() -> None:
+    """Holding a key must not resolve a queue of unread suggestions (review of #31)."""
+    page = render_page("n0nce")
+    assert "if (ev.repeat) return;" in page
+    assert "performance.now() < armedAt" in page
 
 
 def test_page_escapes_nothing_from_meeting() -> None:

@@ -1,6 +1,9 @@
 """Notification and clipboard command selection; running them never raises."""
 
+import asyncio
+import os
 import sys
+from pathlib import Path
 
 import pytest
 
@@ -67,9 +70,50 @@ async def test_run_swallows_missing_command() -> None:
     await system._run(["/nonexistent/sombra-tool"])
 
 
-async def test_run_times_out(monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.setattr(system, "_TIMEOUT_S", 0.05)
-    await system._run([sys.executable, "-c", "import time; time.sleep(5)"])
+_SLEEPER = (
+    "import os, pathlib, sys, time; "
+    "pathlib.Path(sys.argv[1]).write_text(str(os.getpid())); time.sleep(30)"
+)
+
+
+def _alive(pid: int) -> bool:
+    try:
+        os.kill(pid, 0)
+    except ProcessLookupError:
+        return False
+    return True
+
+
+def _read_pid(path: Path) -> int | None:
+    text = path.read_text() if path.exists() else ""
+    return int(text) if text else None
+
+
+async def _pid(path: Path) -> int:
+    for _ in range(200):
+        if (pid := _read_pid(path)) is not None:
+            return pid
+        await asyncio.sleep(0.02)
+    raise AssertionError("child never started")
+
+
+async def test_run_times_out_and_kills_the_child(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    monkeypatch.setattr(system, "_TIMEOUT_S", 0.5)
+    pidfile = tmp_path / "pid"
+    await system._run([sys.executable, "-c", _SLEEPER, str(pidfile)])
+    assert not _alive(await _pid(pidfile))
+
+
+async def test_cancel_kills_the_child(tmp_path: Path) -> None:
+    pidfile = tmp_path / "pid"
+    task = asyncio.create_task(system._run([sys.executable, "-c", _SLEEPER, str(pidfile)]))
+    pid = await _pid(pidfile)
+    task.cancel()
+    with pytest.raises(asyncio.CancelledError):
+        await task
+    assert not _alive(pid)
 
 
 async def test_system_helpers_without_tools(monkeypatch: pytest.MonkeyPatch) -> None:

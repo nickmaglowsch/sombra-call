@@ -74,11 +74,11 @@ async def _serve_async(
     from sombra.ui.overlay import OverlayUI
     from sombra.ui.system import no_clipboard, system_clipboard
 
-    ui = OverlayUI(clipboard=no_clipboard if args.no_clipboard else system_clipboard)
     try:
+        ui = OverlayUI(clipboard=no_clipboard if args.no_clipboard else system_clipboard)
         await ui.start()
-    except OSError as e:
-        box["error"] = str(e)
+    except Exception as e:  # report anything, or _run would wait on `ready` forever
+        box["error"] = str(e) or type(e).__name__
         ready.set()
         return
     box["url"] = ui.url

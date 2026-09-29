@@ -103,6 +103,16 @@ def test_run_reports_bind_error(monkeypatch: pytest.MonkeyPatch) -> None:
     assert "address in use" in sys.stderr.getvalue()  # type: ignore[attr-defined]
 
 
+def test_run_reports_any_startup_error(monkeypatch: pytest.MonkeyPatch) -> None:
+    def broken(*args: Any, **kwargs: Any) -> None:
+        raise RuntimeError
+
+    monkeypatch.setattr(OverlayUI, "__init__", broken)
+    monkeypatch.setattr(sys, "stderr", io.StringIO())
+    assert commands._run(_args(no_open=True)) == 1
+    assert "RuntimeError" in sys.stderr.getvalue()  # type: ignore[attr-defined]
+
+
 def test_window_helpers_without_pywebview(monkeypatch: pytest.MonkeyPatch) -> None:
     def missing(name: str) -> None:
         raise ImportError(name)

@@ -30,7 +30,7 @@ from sombra.ui.state import MAX_MESSAGE_BYTES
 log = logging.getLogger(__name__)
 
 LOOPBACK_HOSTS = frozenset({"127.0.0.1", "::1"})
-_FRAME_ID_RE = re.compile(r"^f\d{4,}$")
+_FRAME_ID_RE = re.compile(r"f\d{4,}")
 
 Snapshot = Callable[[], dict[str, Any]]
 MessageHandler = Callable[[str], Awaitable[str | None]]
@@ -171,7 +171,7 @@ class OverlayServer:
 
     async def _frame(self, request: web.Request) -> web.FileResponse:
         frame_id = request.match_info["frame_id"].removesuffix(".jpg")
-        if self._frames_dir is None or not _FRAME_ID_RE.match(frame_id):
+        if self._frames_dir is None or not _FRAME_ID_RE.fullmatch(frame_id):
             raise web.HTTPNotFound()
         path = self._frames_dir / f"{frame_id}.jpg"
         if not path.is_file():
