@@ -5,7 +5,10 @@ description = "Autonomous meeting participant: local STT + screen timeline, answ
 readme = "README.md"
 requires-python = ">=3.12"
 license = { text = "Proprietary" }
-dependencies = []
+dependencies = [
+    "pyobjc-framework-quartz>=10.3 ; sys_platform == 'darwin'",
+    "pyobjc-framework-screencapturekit>=10.3 ; sys_platform == 'darwin'",
+]
 
 [project.scripts]
 sombra = "sombra.cli:main"
