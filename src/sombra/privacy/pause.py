@@ -46,7 +46,11 @@ class PauseController:
         return self._set(None)[1]
 
     def subscribe(self, callback: Subscriber) -> Callable[[], None]:
-        """Call ``callback(is_paused)`` on every change. Returns an unsubscribe function."""
+        """Call ``callback(is_paused)`` on every change. Returns an unsubscribe function.
+
+        Callbacks run in order while a notify lock is held: they must be quick and must not
+        block waiting on another thread that may itself call ``pause()``/``resume()``.
+        """
         with self._lock:
             self._subscribers.append(callback)
 
