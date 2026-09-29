@@ -9,7 +9,7 @@ from __future__ import annotations
 import itertools
 import threading
 from collections.abc import Callable
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from typing import Any
 
 import numpy as np
@@ -86,9 +86,38 @@ class FakeStream:
         t.join()
 
 
-@dataclass
+class FakeInputOutputPair:
+    """Mirrors ``sounddevice._InputOutputPair``: ``__getitem__`` only, not a list or tuple.
+
+    A ``None`` slot falls back to PortAudio's default (``FakeDefault.system_device``).
+    """
+
+    def __init__(self, pair: list[Any], fallback: tuple[int, int]) -> None:
+        self._pair = pair
+        self._fallback = fallback
+
+    def __getitem__(self, index: int | str) -> Any:
+        i = {"input": 0, "output": 1}.get(index, index) if isinstance(index, str) else index
+        value = self._pair[i]
+        return self._fallback[i] if value is None else value
+
+    def __repr__(self) -> str:
+        return f"[{self[0]!r}, {self[1]!r}]"
+
+
 class FakeDefault:
-    device: Any = field(default_factory=lambda: [0, 1])
+    """Like ``sounddevice.default``: assigning ``device`` stores an input/output pair."""
+
+    system_device: tuple[int, int] = (0, 1)
+
+    def __init__(self) -> None:
+        self.device = None
+
+    def __setattr__(self, name: str, value: Any) -> None:
+        if name == "device" and not isinstance(value, FakeInputOutputPair):
+            pair = list(value) if isinstance(value, list | tuple) else [value, value]
+            value = FakeInputOutputPair(pair, self.system_device)
+        object.__setattr__(self, name, value)
 
 
 class FakeSounddevice:
