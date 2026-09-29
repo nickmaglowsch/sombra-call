@@ -282,7 +282,9 @@ def check_models(stt_model: str, models_dir: Path | None = None) -> str:
 # pywhispercpp loads a model inside ``redirect_stderr``, which ``dup2``s the process-wide
 # stderr fd. The transcriber loads one engine per channel on two threads at once, and two
 # overlapping redirects restore the wrong fd (EBADF on stderr / pytest's capture fds).
-# Loading one engine at a time avoids it. See issue #48.
+# Loading one engine at a time avoids it.
+# TEMPORARY (#48): go back to WhisperTranscriber.from_settings once transcription loads
+# engines safely; then drop _ENGINE_LOAD, one_at_a_time and this copy of the factory.
 _ENGINE_LOAD = threading.Lock()
 
 
@@ -307,7 +309,7 @@ def build_transcriber(
     """Silero VAD + whisper.cpp; the user's names go in Whisper's prompt (T4).
 
     Same parts as ``WhisperTranscriber.from_settings``, except that the whisper engines
-    are loaded one at a time (see ``_ENGINE_LOAD``).
+    are loaded one at a time (see ``_ENGINE_LOAD``). TEMPORARY (#48).
     """
     from sombra.transcription.silero import SileroVad
     from sombra.transcription.whisper import PyWhisperCppEngine

@@ -5,6 +5,8 @@ from __future__ import annotations
 import asyncio
 import dataclasses
 import json
+import tempfile
+from collections.abc import Iterator
 from datetime import datetime, timedelta
 from pathlib import Path
 
@@ -273,7 +275,7 @@ def test_live_brain_and_summary_follow_the_level_and_key(tmp_path: Path) -> None
     assert type(build_brain(codex)).__name__ == "CodexBrain"  # `codex login` suffices
 
 
-async def test_run_live_records_until_stopped(tmp_path: Path) -> None:
+async def test_run_live_records_until_stopped(tmp_path: Path, socket_dir: Path) -> None:
     from sombra.audio import FileAudioSource
 
     plan = _plan(tmp_path, AutonomyLevel.L0)
@@ -300,7 +302,7 @@ async def test_run_live_records_until_stopped(tmp_path: Path) -> None:
             stop,
             sources=sources,
             transcriber=fake_transcriber(),
-            control_socket=tmp_path / "run" / "control.sock",
+            control_socket=socket_dir / "control.sock",
             pause=pause,
         ),
         timeout=20,
@@ -310,7 +312,7 @@ async def test_run_live_records_until_stopped(tmp_path: Path) -> None:
     assert [e["type"] for e in events] == ["trigger"]  # L0: logged, never answered
     transcript = (plan.meeting_dir / "transcript.md").read_text()
     assert "OUTROS: Maria, você pode explicar este gráfico na tela?" in transcript
-    assert not (tmp_path / "run" / "control.sock").exists()  # closed with the session
+    assert not (socket_dir / "control.sock").exists()  # closed with the session
 
 
 def test_stop_signal_requested_before_the_loop_binds() -> None:
@@ -330,9 +332,19 @@ def test_discard_meeting(tmp_path: Path) -> None:
     assert not meeting.exists()
 
 
-async def test_run_live_closes_what_it_opened_when_startup_fails(tmp_path: Path) -> None:
+@pytest.fixture
+def socket_dir() -> Iterator[Path]:
+    """Short dir for Unix sockets: macOS caps AF_UNIX paths at 104 bytes, and pytest's
+    ``tmp_path`` there (/private/var/folders/...) is already longer than that."""
+    with tempfile.TemporaryDirectory(prefix="sb", dir="/tmp") as d:
+        yield Path(d)
+
+
+async def test_run_live_closes_what_it_opened_when_startup_fails(
+    tmp_path: Path, socket_dir: Path
+) -> None:
     plan = _plan(tmp_path, AutonomyLevel.L0)
-    socket = tmp_path / "run" / "control.sock"
+    socket = socket_dir / "control.sock"
 
     def broken_sources(p: LivePlan) -> tuple[object, object]:
         assert socket.exists()  # the control socket was already listening

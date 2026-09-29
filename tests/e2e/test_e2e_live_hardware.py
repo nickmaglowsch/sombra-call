@@ -46,7 +46,7 @@ async def test_live_capture_records_speech_and_frames(tmp_path: Path) -> None:
         plan,
         stop,
         transcriber=build_transcriber(cfg.models.stt, vocabulary=["Maria"]),
-        control_socket=tmp_path / "control.sock",
+        control_socket=None,  # the default path; pytest's tmp_path is too long for AF_UNIX on macOS
     )
     await stopper
     transcript = (meeting / "transcript.md").read_text(encoding="utf-8")
