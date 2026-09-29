@@ -144,12 +144,8 @@ jobs:
         with:
           path: ~/.cache/sombra/models
           key: release-smoke-models-${{ runner.os }}-${{ runner.arch }}-tiny-vad
-      - name: Download models with the installed tool
-        # TODO(#45): `sombra models download tiny` once the models command lands.
-        run: |
-          "$(uv tool dir)/sombra/bin/python" -c "
-          from sombra.transcription import SILERO_VAD, ensure_model, whisper_model
-          print(ensure_model(SILERO_VAD)); print(ensure_model(whisper_model('tiny')))"
+      - name: sombra models download tiny
+        run: sombra models download tiny
       - name: sombra replay (fake brain)
         run: |
           fx=fixture-src/tests/fixtures/e2e
