@@ -1,0 +1,6 @@
+{
+  "uuid": "sombra-spike@sombra.local",
+  "name": "Sombra spike: focused window info",
+  "description": "Issue #16 spike only. Exposes the focused window's title, WM class and app id on the session bus (org.sombra.Spike.WindowInfo.Focused). Any process in your session can read it; remove it after the spike.",
+  "shell-version": ["45", "46", "47", "48", "49", "50"]
+}
