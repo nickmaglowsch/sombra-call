@@ -102,3 +102,30 @@ def test_backward_error_slews_instead_of_squashing_chunks() -> None:
     # Each 10 ms step shrinks by at most the 0.5 ms slew: never squashed to ~0.
     assert min(gaps) >= 10_000_000 - 500_001
     assert all(g > 0 for g in gaps)
+
+
+def test_floor_from_a_previous_stream_keeps_natural_spacing() -> None:
+    from itertools import pairwise
+
+    from sombra.audio.clock import NS, HostSyncedTimer
+    from sombra.contracts import SAMPLE_RATE
+
+    floor = 10 * NS
+    t = HostSyncedTimer(48_000, floor_ns=floor)
+    t.observe(480, floor - 80_000_000 + 10_000_000)  # new stream starts 80 ms "behind"
+    stamps = [t.stamp(i * 800) for i in range(5)]  # 50 ms chunks at 16 kHz
+    assert stamps[0] == floor + NS // SAMPLE_RATE
+    assert all(b - a == 50_000_000 for a, b in pairwise(stamps))
+    for k in range(2, 400):  # host keeps saying "80 ms earlier": slews back gently
+        t.observe(480 * k, floor - 70_000_000 + 10_000_000 * k)
+    later = t.stamp(800 * 100)
+    assert later < floor + 100 * 50_000_000  # the 80 ms lead is being paid back
+
+
+def test_floor_not_needed_when_the_new_stream_is_ahead() -> None:
+    from sombra.audio.clock import NS, HostSyncedTimer
+
+    t = HostSyncedTimer(48_000, floor_ns=5 * NS)
+    t.observe(480, 7 * NS)
+    assert t.stamp(0) == 7 * NS - 10_000_000
+    assert t.stamp(800) == 7 * NS + 40_000_000
