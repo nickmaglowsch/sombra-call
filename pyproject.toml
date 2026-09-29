@@ -5,7 +5,9 @@ description = "Autonomous meeting participant: local STT + screen timeline, answ
 readme = "README.md"
 requires-python = ">=3.12"
 license = { text = "Proprietary" }
-dependencies = []
+dependencies = [
+    "pillow>=12.3.0",
+]
 
 [project.scripts]
 sombra = "sombra.cli:main"
