@@ -50,7 +50,7 @@ sha256sum -c --ignore-missing SHA256SUMS        # Ubuntu
 shasum -a 256 -c --ignore-missing SHA256SUMS    # macOS
 ```
 
-Every file you downloaded must print `OK`. `--ignore-missing` skips the assets you didn't download. `install.sh` does the same check before it installs a release. `SHA256SUMS` proves the files match what the workflow built, not who built them. Releases are not signed yet: signing is the `.app` follow-up in ADR 0044.
+Every file you downloaded must print `OK`. `--ignore-missing` skips the assets you didn't download. `install.sh` does the same check before it installs a release. `SHA256SUMS` proves the files match what the workflow built, not who built them. Releases are not signed yet: signing is the `.app` follow-up (#50) in ADR 0044.
 
 ## Installing a release by hand
 

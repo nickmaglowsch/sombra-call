@@ -68,13 +68,13 @@ macOS attributes Microphone, Screen Recording and Accessibility to the **respons
 - **Signing:** an Apple Developer Program membership (USD 99/year), a Developer ID Application certificate and a notarytool API key, all stored as repository secrets. The build must sign every nested Mach-O, which PyInstaller's `--codesign-identity` and Briefcase's `briefcase package` handle with care around dylibs. Notarization runs on each release (minutes to hours in Apple's queue).
 - **Upgrade and uninstall:** drag-and-drop or Sparkle for the app, while the CLI needs a symlink into `PATH`. That is more moving parts than (a).
 - **CI cost:** a macOS build job per release, plus notarization waits. Free on a public repo, but the slowest option.
-- **Verdict:** this is where the macOS product should go, because permissions scoped to Sombra matter for a tool that records calls. But it is a project of its own, with an account, secrets and a signing pipeline, and it blocks nothing in the MVP. Filed as a follow-up.
+- **Verdict:** this is where the macOS product should go, because permissions scoped to Sombra matter for a tool that records calls. But it is a project of its own, with an account, secrets and a signing pipeline, and it blocks nothing in the MVP. Filed as #50.
 
 ### (c) Homebrew tap and/or `.deb`
 
 - **Homebrew:** a tap formula for a Python app declares every dependency as a `resource`. `virtualenv_install_with_resources` then builds them into a Homebrew-managed Python. homebrew-core policy builds from source, and onnxruntime has no sdist, so that is out. A private tap could install our wheel plus PyPI wheels, but at that point it is a wrapper around (a) with the same TCC story and one more repository to keep in sync. `brew upgrade` and `brew uninstall` are the nice part.
 - **`.deb`:** it would need `dh-virtualenv` or a vendored venv, since Ubuntu 22.04's Python is 3.10. It would need an apt repository or a manual `dpkg -i`, and per-architecture builds. That is a lot of packaging for no gain over (a) on Linux, where there is no TCC.
-- **Verdict:** a Homebrew tap that installs the released wheel is a cheap convenience once releases are stable. Filed as a follow-up. No `.deb`.
+- **Verdict:** a Homebrew tap that installs the released wheel is a cheap convenience once releases are stable. Filed as #51. No `.deb`.
 
 ## Decision
 
@@ -93,6 +93,6 @@ macOS attributes Microphone, Screen Recording and Accessibility to the **respons
 
 ## Follow-ups
 
-- Signed and notarized macOS `.app`, so the TCC grants belong to Sombra: filed as a follow-up issue.
-- A Homebrew tap that installs the released wheel: filed as a follow-up issue.
+- Signed and notarized macOS `.app`, so the TCC grants belong to Sombra: #50.
+- A Homebrew tap that installs the released wheel: #51.
 - `sombra replay` with the fake brain in the smoke job, once #17 merges: a TODO in `release.yml`.
