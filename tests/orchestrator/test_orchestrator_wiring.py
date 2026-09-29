@@ -328,3 +328,36 @@ def test_discard_meeting(tmp_path: Path) -> None:
     meeting = _meeting(tmp_path)
     discard_meeting(meeting)
     assert not meeting.exists()
+
+
+async def test_run_live_closes_what_it_opened_when_startup_fails(tmp_path: Path) -> None:
+    plan = _plan(tmp_path, AutonomyLevel.L0)
+    socket = tmp_path / "run" / "control.sock"
+
+    def broken_sources(p: LivePlan) -> tuple[object, object]:
+        assert socket.exists()  # the control socket was already listening
+        raise RuntimeError("no microphone")
+
+    with pytest.raises(RuntimeError, match="no microphone"):
+        await run_live(
+            plan,
+            StopSignal(),
+            sources=broken_sources,  # type: ignore[arg-type]
+            transcriber=fake_transcriber(),
+            control_socket=socket,
+        )
+    assert not socket.exists()
+
+
+async def test_epoch_hook_failure_is_only_logged(
+    tmp_path: Path, caplog: pytest.LogCaptureFixture
+) -> None:
+    store = MeetingStore(_meeting(tmp_path), started_at=T0)
+
+    def not_started(summary: str) -> None:
+        raise RuntimeError("brain not started")
+
+    hooks = SummaryHooks(store, FakeModel([]), started_at=T0, on_epoch=not_started)
+    hooks.epoch_started(1)  # must not raise: Session logs the epoch after this hook
+    assert "did not take the new summary" in caplog.text
+    store.close()

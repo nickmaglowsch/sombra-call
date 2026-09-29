@@ -129,6 +129,8 @@ class PauseAdapter:
 class OneMarkerStore:
     """``TimelineStore`` over ``MeetingStore`` that writes each frame's ``TELA`` line once.
 
+    TEMPORARY (#41): remove once ``TimelineStore.append_frame``'s marker contract is settled.
+
     ``MeetingStore.append_frame`` writes the index record *and* its marker, while
     ``Session`` also sends the same ``FrameMarker`` down the timeline queue (so the
     trigger detector sees it in order) and appends it again. This keeps the store's
@@ -236,8 +238,14 @@ class SummaryHooks:
         return EpochSummary(model=result.event.model, usage=result.event.usage)
 
     def epoch_started(self, epoch: int) -> None:
-        if self._on_epoch is not None:
+        if self._on_epoch is None:
+            return
+        try:
             self._on_epoch(self._summarizer.summary)
+        except Exception:
+            # e.g. the brain never started (no network at the start): the epoch itself
+            # is written and logged; only the prompt prefix keeps the old summary.
+            log.exception("epoch %d: the brain did not take the new summary", epoch)
 
     async def write_minutes(self) -> None:
         self._store.sync()
@@ -401,7 +409,7 @@ def build_session(
         transcriber=transcriber,
         screen=screen,
         frames=frames or DedupeFramePipeline(meeting_dir),
-        store=OneMarkerStore(store),
+        store=OneMarkerStore(store),  # TEMPORARY (#41)
         detector=detector,
         brain=brain,
         ui=ui,

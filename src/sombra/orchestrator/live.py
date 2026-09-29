@@ -20,7 +20,7 @@ import shutil
 import signal
 import sys
 import threading
-from collections.abc import Callable, Sequence
+from collections.abc import Awaitable, Callable, Sequence
 from dataclasses import dataclass, field
 from datetime import datetime
 from pathlib import Path
@@ -32,6 +32,7 @@ from sombra.orchestrator.session import local_now
 from sombra.orchestrator.settings import SessionSettings
 from sombra.orchestrator.wiring import (
     ANTHROPIC,
+    Assembly,
     NoBrain,
     SilentUI,
     build_agent_brain,
@@ -156,48 +157,61 @@ async def run_live(
     user = plan.config.user
     if transcriber is None:  # pragma: no cover - needs the whisper model (hardware test)
         transcriber = build_transcriber(plan.config.models.stt, vocabulary=user.all_aliases)
-    closers = []
-    if ui is None:
-        if plan.level is AutonomyLevel.L0:
-            ui = SilentUI()
-        else:  # pragma: no cover - opens a local web server + window (manual test)
-            from sombra.ui import OverlayUI
-
-            overlay = OverlayUI(frames_dir=plan.meeting_dir / "frames")
-            await overlay.start()
-            closers.append(overlay.close)
-            if on_ui_url is not None:
-                on_ui_url(overlay.url)
-            ui = overlay
-    pause = pause or PauseController()
-    control = ControlServer(pause, control_socket)
+    closers: list[Callable[[], Awaitable[None]]] = []
+    assembly: Assembly | None = None
     try:
-        await control.start()
-        closers.append(control.close)
-    except OSError as e:
-        log.warning("`sombra pause` will not work: control socket unavailable (%s)", e)
-    audio, screen = sources(plan)
-    assembly = build_session(
-        plan.meeting_dir,
-        audio=audio,
-        transcriber=transcriber,
-        screen=screen,
-        detector=build_detector(user.name, user.aliases),
-        brain=brain,
-        ui=ui,
-        settings=SessionSettings(
-            autonomy=plan.level,
-            screen_interval_s=plan.config.capture_interval_s,
-            epoch_interval_s=epoch_interval_s(),
-        ),
-        started_at=plan.started_at,
-        summary_model=summary_model(plan),
-        on_epoch=getattr(brain, "start_epoch", None),
-        pause=pause,
-        blocked=plan.blocked.is_blocked,
-        clock=local_now,
-    )
-    assembly.closers.extend(closers)
+        if ui is None:
+            if plan.level is AutonomyLevel.L0:
+                ui = SilentUI()
+            else:  # pragma: no cover - opens a local web server + window (manual test)
+                from sombra.ui import OverlayUI
+
+                overlay = OverlayUI(frames_dir=plan.meeting_dir / "frames")
+                await overlay.start()
+                closers.append(overlay.close)
+                if on_ui_url is not None:
+                    on_ui_url(overlay.url)
+                ui = overlay
+        pause = pause or PauseController()
+        control = ControlServer(pause, control_socket)
+        try:
+            await control.start()
+            closers.append(control.close)
+        except OSError as e:
+            log.warning("`sombra pause` will not work: control socket unavailable (%s)", e)
+        audio, screen = sources(plan)
+        assembly = build_session(
+            plan.meeting_dir,
+            audio=audio,
+            transcriber=transcriber,
+            screen=screen,
+            detector=build_detector(user.name, user.aliases),
+            brain=brain,
+            ui=ui,
+            settings=SessionSettings(
+                autonomy=plan.level,
+                screen_interval_s=plan.config.capture_interval_s,
+                epoch_interval_s=epoch_interval_s(),
+            ),
+            started_at=plan.started_at,
+            summary_model=summary_model(plan),
+            on_epoch=getattr(brain, "start_epoch", None),
+            pause=pause,
+            blocked=plan.blocked.is_blocked,
+            clock=local_now,
+        )
+        assembly.closers.extend(closers)
+        closers = []  # the assembly closes them now
+        await _run_until_stopped(assembly, stop)
+    finally:
+        if assembly is not None:
+            await assembly.close()
+        for close in reversed(closers):  # startup failed before the session existed
+            with contextlib.suppress(Exception):
+                await close()
+
+
+async def _run_until_stopped(assembly: Assembly, stop: StopSignal) -> None:
     session = assembly.session
     task = asyncio.create_task(session.run(), name="meeting")
     stopper = asyncio.create_task(stop.wait())
@@ -211,7 +225,6 @@ async def run_live(
         if not task.done():
             task.cancel()
             await asyncio.gather(task, return_exceptions=True)
-        await assembly.close()
 
 
 def run_in_terminal(plan: LivePlan, **kwargs: Any) -> None:  # pragma: no cover - live path
@@ -258,11 +271,12 @@ def run_with_window(plan: LivePlan, shortcut: str) -> None:  # pragma: no cover 
         finally:
             ready.set()
 
-    thread = threading.Thread(target=worker, name="sombra-session")
-    thread.start()
-    ready.wait()
+    # Daemon: a second Ctrl+C while stopping aborts without waiting for the minutes.
+    thread = threading.Thread(target=worker, name="sombra-session", daemon=True)
     hotkey = None
     try:
+        thread.start()
+        ready.wait()  # a Ctrl+C during startup lands here, and the finally still stops it
         if "url" in box:
             with contextlib.suppress(Exception):
                 hotkey = MacHotkey(shortcut, lambda: _toggle(pause))
@@ -275,7 +289,11 @@ def run_with_window(plan: LivePlan, shortcut: str) -> None:  # pragma: no cover 
         if hotkey is not None:
             hotkey.stop()
         stop.request()
-        thread.join()
+        try:
+            thread.join()
+        except KeyboardInterrupt:
+            sys.stderr.write("sombra: abortado; a ata não foi gravada\n")
+            raise
     if errors:
         raise errors[0]
 
