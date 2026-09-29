@@ -28,6 +28,11 @@ jobs:
           enable-cache: true
       - name: Install
         run: uv sync --locked
+      - name: Cache models (whisper tiny + Silero VAD for the transcription tests)
+        uses: actions/cache@v4
+        with:
+          path: ~/.cache/sombra/models
+          key: models-${{ runner.os }}-${{ hashFiles('src/sombra/transcription/models.py') }}
       - name: Lint
         run: uv run ruff check --output-format=github .
       - name: Format

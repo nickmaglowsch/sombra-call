@@ -19,7 +19,7 @@ from typing import IO
 log = logging.getLogger(__name__)
 
 # ggerganov/whisper.cpp on Hugging Face, pinned to one commit so the files cannot change.
-WHISPER_REVISION = "main"
+WHISPER_REVISION = "5359861c739e955e79d9a303bcbc70fb988958b1"
 _WHISPER_BASE = f"https://huggingface.co/ggerganov/whisper.cpp/resolve/{WHISPER_REVISION}"
 SILERO_REVISION = "v6.2"
 _SILERO_BASE = f"https://raw.githubusercontent.com/snakers4/silero-vad/{SILERO_REVISION}"
@@ -40,12 +40,28 @@ def _whisper(name: str, sha256: str, size: int) -> ModelFile:
 
 WHISPER_MODELS: dict[str, ModelFile] = {
     # default on Apple Silicon (T2): best PT-BR accuracy that still runs ~1 s per utterance
-    "large-v3-turbo-q5_0": _whisper("large-v3-turbo-q5_0", "", 0),
+    "large-v3-turbo-q5_0": _whisper(
+        "large-v3-turbo-q5_0",
+        "394221709cd5ad1f40c46e6031ca61bce88931e6e088c188294c6d5a55ffa7e2",
+        574_041_195,
+    ),
     # fallbacks for slower machines
-    "medium-q5_0": _whisper("medium-q5_0", "", 0),
-    "small-q5_1": _whisper("small-q5_1", "", 0),
+    "medium-q5_0": _whisper(
+        "medium-q5_0",
+        "19fea4b380c3a618ec4723c3eef2eb785ffba0d0538cf43f8f235e7b3b34220f",
+        539_212_467,
+    ),
+    "small-q5_1": _whisper(
+        "small-q5_1",
+        "ae85e4a935d7a567bd102fe55afc16bb595bdb618e11b2fc7591bc08120411bb",
+        190_085_487,
+    ),
     # CI and quick checks only; too inaccurate for meetings
-    "tiny": _whisper("tiny", "", 0),
+    "tiny": _whisper(
+        "tiny",
+        "be07e048e1e599ad46341c8d2a135645097a538221678b7acdd1b1919c6e1b21",
+        77_691_713,
+    ),
 }
 DEFAULT_WHISPER_MODEL = "large-v3-turbo-q5_0"
 

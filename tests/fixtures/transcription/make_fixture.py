@@ -12,6 +12,7 @@ from __future__ import annotations
 import ctypes
 import wave
 from pathlib import Path
+from typing import Any
 
 import numpy as np
 
@@ -35,7 +36,7 @@ def _synth(text: str) -> np.ndarray:
     rate = lib.espeak_Initialize(2, 0, data, 0)  # AUDIO_OUTPUT_SYNCHRONOUS
     samples: list[int] = []
 
-    def on_audio(wav: ctypes.Any, n: int, _events: ctypes.c_void_p) -> int:  # type: ignore[name-defined]
+    def on_audio(wav: Any, n: int, _events: object) -> int:
         if wav and n > 0:
             samples.extend(wav[:n])
         return 0
