@@ -6,6 +6,7 @@ import pytest
 
 from sombra.config import (
     AudioConfig,
+    BrainConfig,
     ConfigError,
     ModelsConfig,
     RetentionConfig,
@@ -88,6 +89,9 @@ def test_full_user_config(tmp_path: Path) -> None:
         stt = "small"
         agent = "opus"
         summary = "haiku"
+
+        [brain]
+        backend = "codex"
         """,
     )
     cfg = load_user_config(path)
@@ -99,6 +103,7 @@ def test_full_user_config(tmp_path: Path) -> None:
         retention=RetentionConfig(frames_days=3, transcripts_days=60),
         audio=AudioConfig(mic="MacBook Pro Microphone", system="BlackHole 2ch"),
         models=ModelsConfig(stt="small", agent="opus", summary="haiku"),
+        brain=BrainConfig(backend="codex"),
     )
     assert cfg.user.all_aliases == ("Nick", "Nicolas")
 
@@ -108,6 +113,7 @@ def test_partial_config_keeps_other_defaults(tmp_path: Path) -> None:
     cfg = load_user_config(path)
     assert cfg.user.all_aliases == ("Ana",)
     assert cfg.retention == RetentionConfig()
+    assert cfg.brain == BrainConfig(backend="claude")
     assert cfg.meetings_root == Path("~/Sombra/meetings").expanduser()
 
 
@@ -126,6 +132,9 @@ def test_partial_config_keeps_other_defaults(tmp_path: Path) -> None:
         ('user = "Nick"\n', "user", "a table"),
         ('[audio]\nmicrophone = "x"\n', "audio.microphone", "unknown key"),
         ("colour = 1\n", "colour", "unknown key"),
+        ('[brain]\nbackend = "gpt"\n', "brain.backend", "one of claude, codex"),
+        ("[brain]\nbackend = 1\n", "brain.backend", "a string"),
+        ('[brain]\nmodel = "x"\n', "brain.model", "unknown key"),
     ],
 )
 def test_config_errors_name_file_and_key(
