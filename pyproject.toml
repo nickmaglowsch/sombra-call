@@ -10,9 +10,11 @@ dependencies = [
     "numpy>=2.5.3",
     "onnxruntime>=1.30.0",
     "pyobjc-framework-cocoa>=12.2.2 ; sys_platform == 'darwin'",
+    "pyobjc-framework-coreaudio>=10.3 ; sys_platform == 'darwin'",
     "pyobjc-framework-quartz>=10.3 ; sys_platform == 'darwin'",
     "pyobjc-framework-screencapturekit>=10.3 ; sys_platform == 'darwin'",
     "pywhispercpp>=1.5.1",
+    "sounddevice>=0.5 ; sys_platform == 'darwin'",
 ]
 
 [project.scripts]
