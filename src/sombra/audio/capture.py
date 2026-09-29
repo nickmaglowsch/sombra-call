@@ -25,12 +25,15 @@ class ChannelCapture:
         queue: DropOldestQueue,
         *,
         chunk_ms: int = 50,
+        floor_ns: int | None = None,
     ) -> None:
+        """``floor_ns``: chunk stamps stay above it, so a reopened channel never goes
+        back in time (the previous stream's stamps may have run ahead of the host)."""
         self.channel = channel
         self.clock = clock
         self.queue = queue
         self.chunker = Chunker(in_rate, chunk_ms)
-        self.timer = HostSyncedTimer(in_rate)
+        self.timer = HostSyncedTimer(in_rate, floor_ns=floor_ns)
         self.overflows = 0  # device-side overruns reported by the backend
 
     def on_frames(
