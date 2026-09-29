@@ -127,7 +127,7 @@ def test_cask_installs_the_app_and_links_the_bundles_cli_shim() -> None:
     assert f'binary "#{{appdir}}/{SHIM}"' in text
     assert SHIM.startswith("Sombra.app/Contents/")
     assert text.count("depends_on arch: :arm64") == 1
-    assert 'depends_on macos: ">= :sonoma"' in text
+    assert "depends_on macos: :sonoma" in text
 
 
 def test_livecheck_follows_github_releases() -> None:
