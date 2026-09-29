@@ -5,10 +5,17 @@ description = "Autonomous meeting participant: local STT + screen timeline, answ
 readme = "README.md"
 requires-python = ">=3.12"
 license = { text = "Proprietary" }
-dependencies = []
+dependencies = [
+    "aiohttp>=3.10",
+]
 
 [project.scripts]
 sombra = "sombra.cli:main"
+
+[project.optional-dependencies]
+window = [
+    "pywebview>=5.0",
+]
 
 [dependency-groups]
 dev = [
