@@ -59,7 +59,7 @@ What you need:
 
 - `claude` 2.1.285 or newer on `PATH` (`claude --version`; update with `claude update`). An older or unrecognised CLI is refused, because the confinement below depends on its flags.
 - A subscription login: run `claude` once and use `/login`. If Sombra reports "Claude Code is not logged in", do that again.
-- No API key. Sombra never passes `ANTHROPIC_API_KEY`, `ANTHROPIC_AUTH_TOKEN` or `ANTHROPIC_BASE_URL` to the CLI, even if they are set in your shell, because a key would move billing from the subscription to the API. Sombra never reads, copies or stores the CLI's login.
+- No API key. Sombra never passes `ANTHROPIC_API_KEY`, `ANTHROPIC_AUTH_TOKEN` or `ANTHROPIC_BASE_URL` to the CLI, even if they are set in your shell, because a key would move billing from the subscription to the API. Sombra never reads, copies or stores the CLI's login. `CLAUDE_CODE_OAUTH_TOKEN` (from `claude setup-token`) is not passed through either, so log in with `/login` rather than relying on that variable.
 
 What each answer does:
 

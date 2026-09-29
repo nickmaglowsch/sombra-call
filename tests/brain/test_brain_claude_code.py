@@ -483,6 +483,12 @@ async def test_api_keys_in_sombras_env_never_reach_the_cli(
         (stream(tools=("Read", "Grep", "Glob", "Bash")), "beyond Read/Grep/Glob"),
         (stream(mcp_servers=[{"name": "x", "status": "connected"}]), "MCP"),
         (stream(permission_mode="bypassPermissions"), "not dontAsk"),
+        (
+            stream().replace(
+                '"tools":', '"plugins": [{"name": "x", "source": "x@market"}], "tools":'
+            ),
+            "non-builtin plugins: x@market",
+        ),
         (stream(tool_uses=("Read", "WebFetch")), "forbidden tool: WebFetch"),
         (stream().split("\n", 1)[1], "no init event"),
     ],
@@ -496,6 +502,14 @@ async def test_a_wider_sandbox_voids_the_answer(meeting: Path, output: str, matc
 
 def test_check_confinement_accepts_a_narrower_tool_set() -> None:
     check_confinement(ClaudeCodeRun(init={"tools": ["Read"], "permissionMode": "dontAsk"}))
+    builtin = [{"name": "cc-plugin-agents-md", "source": "cc-plugin-agents-md@builtin"}]
+    check_confinement(
+        ClaudeCodeRun(init={"tools": [], "permissionMode": "dontAsk", "plugins": builtin})
+    )
+    with pytest.raises(BrainSandboxError, match="plugins: odd"):
+        check_confinement(
+            ClaudeCodeRun(init={"tools": [], "permissionMode": "dontAsk", "plugins": ["odd"]})
+        )
     with pytest.raises(BrainSandboxError):
         check_confinement(ClaudeCodeRun(init={"tools": "Read", "permissionMode": "dontAsk"}))
 

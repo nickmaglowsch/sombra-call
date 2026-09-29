@@ -205,6 +205,15 @@ def test_claude_old_cli_is_refused(version: CliResult) -> None:
         (claude_error("API Error: 500", 500), CliModelError, "failed"),
         (claude_out(tools=("Read",)), CliModelError, "without tools"),
         (claude_out(tool_use=True), CliModelError, "tool call"),
+        (
+            CliResult(
+                0,
+                claude_out().stdout.replace('"tools":', '"plugins": [{"source": "x@m"}], "tools":'),
+                "",
+            ),
+            CliModelError,
+            "without tools",
+        ),
         (claude_out(stop="max_tokens"), CliModelError, "truncated"),
         (CliResult(0, "", ""), CliModelError, "no output"),
     ],
@@ -255,6 +264,14 @@ def test_codex_text_model_runs_without_tools(monkeypatch: pytest.MonkeyPatch) ->
     assert "sk-nao-vaza" not in json.dumps(run["env"])
 
 
+def test_codex_inert_items_are_fine() -> None:
+    calls = Calls(
+        codex_out({"type": "reasoning", "text": "..."}, {"type": "error", "message": "w"})
+    )
+    text, _ = codex(calls).complete(SYSTEM, USER, 100)
+    assert text == "### Tópicos\n- beta"
+
+
 def test_codex_settings() -> None:
     calls = Calls(codex_out())
     codex(calls, model="gpt-x", reasoning_effort=None).complete('diga "oi"\n', USER, 10)
@@ -269,6 +286,9 @@ def test_codex_settings() -> None:
     [
         (codex_out({"type": "command_execution", "command": "ls"}), CliModelError),
         (codex_out({"type": "web_search"}), CliModelError),
+        (codex_out({"type": "collab_tool_call", "tool": "spawn_agent"}), CliModelError),
+        (codex_out({"type": "code_mode_call"}), CliModelError),  # an unknown type fails closed
+        (codex_out({"type": None}), CliModelError),
         (
             CliResult(1, json.dumps({"type": "turn.failed", "error": {"message": "401"}}), ""),
             CliAuthError,

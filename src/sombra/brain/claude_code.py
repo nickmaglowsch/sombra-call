@@ -35,6 +35,7 @@ import json
 import logging
 import os
 import re
+import signal
 import tempfile
 import time
 from collections.abc import Mapping, Sequence
@@ -54,7 +55,7 @@ from sombra.brain.claude import (
     PromptKit,
     default_prompt_kit,
 )
-from sombra.brain.codex import ProcessResult, _kill_group, parse_version
+from sombra.brain.codex import ProcessResult, parse_version
 from sombra.brain.tools import MeetingTools, ToolError
 from sombra.contracts import (
     AutonomyLevel,
@@ -217,6 +218,15 @@ class SubprocessRunner:
             stdout=out.decode("utf-8", errors="replace"),
             stderr=err.decode("utf-8", errors="replace"),
         )
+
+
+def _kill_group(proc: asyncio.subprocess.Process) -> None:
+    """SIGKILL the CLI and everything it started (copied from ``brain.codex`` on purpose)."""
+    try:
+        os.killpg(proc.pid, signal.SIGKILL)
+    except (ProcessLookupError, PermissionError):
+        with contextlib.suppress(ProcessLookupError):
+            proc.kill()
 
 
 # --- command line --------------------------------------------------------------------
@@ -440,6 +450,14 @@ def check_confinement(run: ClaudeCodeRun) -> None:
         raise BrainSandboxError(f"Claude Code offered tools beyond Read/Grep/Glob: {tools}")
     if init.get("mcp_servers"):
         raise BrainSandboxError("Claude Code loaded MCP servers")
+    plugins = init.get("plugins") or []
+    foreign = sorted(
+        str(p.get("source", p)) if isinstance(p, dict) else str(p)
+        for p in plugins
+        if not (isinstance(p, dict) and str(p.get("source", "")).endswith("@builtin"))
+    )
+    if foreign:
+        raise BrainSandboxError(f"Claude Code loaded non-builtin plugins: {', '.join(foreign)}")
     if init.get("permissionMode") != "dontAsk":
         raise BrainSandboxError(
             f"Claude Code ran in permission mode {init.get('permissionMode')!r}, not dontAsk"

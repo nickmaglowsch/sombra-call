@@ -44,6 +44,9 @@ CODEX_ENV = (*_BASE_ENV, "CODEX_HOME")
 CLAUDE_FIXED_ENV = {"CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC": "1", "DISABLE_AUTOUPDATER": "1"}
 
 # Codex features that add a tool; all switched off for a text-only run (codex 0.159.1).
+# They are not enough: 0.159.1 still offers the model code-mode ``exec``/``wait``,
+# ``request_user_input`` and the ``collaboration.*`` sub-agent tools, and no feature or
+# config key removes them (ADR 0046). The allowlist below is the enforcement.
 CODEX_TOOL_FEATURES = (
     "shell_tool",
     "unified_exec",
@@ -60,9 +63,9 @@ CODEX_TOOL_FEATURES = (
     "sleep_tool",
     "hooks",
 )
-CODEX_TOOL_ITEMS = frozenset(
-    {"command_execution", "file_change", "web_search", "mcp_tool_call", "collab_tool_call"}
-)
+# Item types a text-only run may produce. Anything else (a command, a file change, a
+# code-mode or sub-agent call, or a type a newer Codex adds) voids the output.
+CODEX_INERT_ITEMS = frozenset({"agent_message", "reasoning", "error"})
 
 
 class CliModelError(RuntimeError):
@@ -294,7 +297,12 @@ class ClaudeCliTextModel(_CliTextModel):
                 status=final.get("api_error_status"),
                 kind=kinds[-1] if kinds else None,
             )
-        if init is None or init.get("tools") != [] or init.get("mcp_servers"):
+        if (
+            init is None
+            or init.get("tools") != []
+            or init.get("mcp_servers")
+            or _foreign_plugins(init)
+        ):
             raise CliModelError(f"{self.cli} did not start without tools; refusing its output")
         if any(_has_tool_use(e) for e in events):
             raise CliModelError(f"{self.cli} attempted a tool call in a text-only run")
@@ -308,6 +316,14 @@ class ClaudeCliTextModel(_CliTextModel):
             cache_creation_input_tokens=_count(raw, "cache_creation_input_tokens"),
         )
         return str(final.get("result") or ""), usage
+
+
+def _foreign_plugins(init: dict[str, Any]) -> bool:
+    """True when the CLI loaded a plugin that isn't one of its own ``…@builtin`` ones."""
+    return any(
+        not (isinstance(p, dict) and str(p.get("source", "")).endswith("@builtin"))
+        for p in init.get("plugins") or []
+    )
 
 
 def _has_tool_use(event: dict[str, Any]) -> bool:
@@ -406,9 +422,12 @@ class CodexCliTextModel(_CliTextModel):
             if kind == "item.completed" and item.get("type") == "agent_message":
                 text = str(item.get("text", ""))
             elif (
-                kind in ("item.started", "item.completed") and item.get("type") in CODEX_TOOL_ITEMS
+                kind in ("item.started", "item.updated", "item.completed")
+                and item.get("type") not in CODEX_INERT_ITEMS
             ):
-                raise CliModelError(f"{self.cli} attempted a tool call in a text-only run")
+                raise CliModelError(
+                    f"{self.cli} attempted a tool call in a text-only run ({item.get('type')})"
+                )
             elif kind == "turn.completed":
                 completed = True
                 raw = event.get("usage") or {}
