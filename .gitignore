@@ -1,0 +1,25 @@
+__pycache__/
+*.py[cod]
+.venv/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.coverage
+coverage.xml
+htmlcov/
+dist/
+build/
+*.egg-info/
+
+# Models and meeting data never go into git
+models/
+*.bin
+*.gguf
+*.onnx
+meetings/
+*.wav
+!tests/fixtures/**/*.wav
+
+.DS_Store
+.idea/
+.vscode/
