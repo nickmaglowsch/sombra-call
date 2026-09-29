@@ -8,10 +8,12 @@ license = { text = "Proprietary" }
 dependencies = [
     "numpy>=2.5.3",
     "onnxruntime>=1.30.0",
+    "pyobjc-framework-coreaudio>=10.3 ; sys_platform == 'darwin'",
     "pyobjc-framework-quartz>=10.3 ; sys_platform == 'darwin'",
     "pyobjc-framework-screencapturekit>=10.3 ; sys_platform == 'darwin'",
     "pywhispercpp>=1.5.1",
     "rapidfuzz>=3.14.6",
+    "sounddevice>=0.5 ; sys_platform == 'darwin'",
 ]
 
 [project.scripts]
