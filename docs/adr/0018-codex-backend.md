@@ -1,8 +1,8 @@
 # ADR 0018: Codex backend through `codex exec`, confined by a read-only permission profile
 
-- Status: **provisional**. The design and the confinement flags come from the Codex source and its SDK docs. The development container has no OpenAI key and no Codex CLI, so the live checks (answers, latency, cost, injection) wait for a human run. See [Left for a human](#left-for-a-human).
-- Date: 2026-09-29
-- Issue: #18 (PRD C5, C2, C6, "Codex em sandbox read-only")
+- Status: **provisional**. The design and the confinement flags come from the Codex source and its SDK docs. The development container has no OpenAI key, so the live checks (answers, latency, cost, injection) wait for a human run. See [Left for a human](#left-for-a-human). The tool set (#57) *was* verified against a real `codex-cli 0.159.1` with a request capture; see [Tools the model is offered](#tools-the-model-is-offered-57).
+- Date: 2026-09-29 (tool-set amendment for #57: 2026-09-29)
+- Issue: #18 (PRD C5, C2, C6, "Codex em sandbox read-only"); #57 (tools and the output allowlist)
 - Numbering: this ADR uses the issue number, as ADR 0009 does.
 
 ## Context
@@ -23,8 +23,9 @@ What the Codex source says (openai/codex at `94d642d`, 2026-09-29; the same code
    - `--ignore-rules`, `--skip-git-repo-check`, `--cd DIR`, `--image FILE`, `--model`.
    - A prompt of `-` is read from stdin.
    - Approvals default to `never` in exec mode.
-5. **Events** (`exec/src/exec_events.rs`): `turn.completed` carries `usage {input_tokens, cached_input_tokens, cache_write_input_tokens, output_tokens, reasoning_output_tokens}`. `input_tokens` *includes* cached tokens (`TokenUsage::non_cached_input`). Items: `agent_message`, `command_execution`, `file_change`, `web_search`, `mcp_tool_call`, `collab_tool_call`, `reasoning`, `todo_list`, `error`.
+5. **Events** (`exec/src/exec_events.rs`): `turn.completed` carries `usage {input_tokens, cached_input_tokens, cache_write_input_tokens, output_tokens, reasoning_output_tokens}`. `input_tokens` *includes* cached tokens (`TokenUsage::non_cached_input`). Items: `agent_message`, `command_execution`, `file_change`, `web_search`, `mcp_tool_call`, `collab_tool_call`, `reasoning`, `todo_list`, `error`. **Not every tool call becomes an item** (measured on 0.159.1, #57): a code-mode `exec` call and a `collaboration.spawn_agent` call both ran with no item in the JSONL. A shell call made from *inside* `exec` still shows up as `command_execution`.
 6. **Other config.** `CODEX_API_KEY` in the environment authenticates `codex exec` (`login/src/auth/manager.rs`). `web_search = "disabled"`, `features.view_image = false`, `project_doc_max_bytes = 0` (no `AGENTS.md`) and `developer_instructions` are ordinary config keys.
+7. **Tools come from the model catalog, not only from feature flags** (measured on 0.159.1, #57). Each model in the bundled catalog (`codex debug models --bundled`) has fields that add tools: `tool_mode = "code_mode_only"`, `multi_agent_version = "v1" | "v2"`, `experimental_supported_tools`, `supports_search_tool` and `apply_patch_tool_type`. Ten of the eleven bundled models, including the default `gpt-6.1-sol`, are `code_mode_only` with multi-agent. `--disable` flags don't override these fields; `model_catalog_json = "<file>"` replaces the catalog. The table in [Tools the model is offered](#tools-the-model-is-offered-57) has the details.
 
 ## Decision
 
@@ -39,6 +40,10 @@ What the Codex source says (openai/codex at `94d642d`, 2026-09-29; the same code
      -c permissions.sombra.network.enabled=false
      -c approval_policy="never"  -c web_search="disabled"
      -c features.view_image=false  -c project_doc_max_bytes=0
+     -c model_catalog_json="<private temp>/models.json"
+     --disable goals  --disable multi_agent
+     -c tools.experimental_request_user_input={enabled=false}
+     --disable code_mode  --disable code_mode_only  --disable multi_agent_v2
      -c developer_instructions="<system prompt>"  [-c model_reasoning_effort="low"] [--model M]
      [--image frames/fNNNN.jpg ...]  -
    ```
@@ -47,7 +52,7 @@ What the Codex source says (openai/codex at `94d642d`, 2026-09-29; the same code
 2. **Defense in depth on top of the OS sandbox:**
    - The process gets a minimal environment (`PATH`, `HOME`, locale, `TMPDIR`, `CODEX_HOME`, plus `CODEX_API_KEY` from the keychain callable). Other secrets in Sombra's environment never reach the agent's shell.
    - The API key goes in the environment only, never in argv or the prompt.
-   - A `file_change`, `web_search`, `mcp_tool_call` or `collab_tool_call` item voids the answer with `BrainSandboxError` (`kind = "sandbox_violation"`), even though the sandbox or config should already have stopped it.
+   - **The JSONL output is checked against an allowlist (#57).** This replaces the earlier denylist of `file_change`, `web_search`, `mcp_tool_call` and `collab_tool_call`, which let every other type through. Allowed events are `thread.started`, `turn.started`, `turn.completed`, `turn.failed`, `item.started`, `item.updated`, `item.completed` and `error`. Allowed items are `agent_message`, `reasoning`, `command_execution` and `error` (a warning such as "model metadata not found", which carries only a message). Anything else voids the answer with `BrainSandboxError` (`kind = "sandbox_violation"`). That includes an unknown type, an item without a type, and an item that is only started. This is the second line of defence. Fact 5 shows why it can't be the first: code mode and sub-agent calls emit no item at all.
    - Every `command_execution` is kept in `CodexBrain.last_run` for audit.
 3. **Prompts come from `brain.prompt` (#8)** through the same `PromptKit` as Claude. `render_request` builds the Messages-shaped body; `flatten_request` then sends `system` as Codex **developer instructions** and the user content (context, epoch summary, transcript, tail) on **stdin**. Meeting content stays inside `<dados>` delimiters and never reaches the developer role. Image blocks are dropped from the text and the same frames go through `--image`; the `Imagem da tela fNNNN:` labels stay in the text in the same order.
 4. **Images stay out of history (C6)** by construction:
@@ -64,15 +69,50 @@ What the Codex source says (openai/codex at `94d642d`, 2026-09-29; the same code
    So `claude.cache_hit_rate` works unchanged for both backends.
 6. **Selection by config.** `[brain] backend = "claude" | "codex"` in the user config (default `claude`). `sombra.brain.backend.create_brain(backend, ...)` builds the right `Brain`, and the orchestrator only ever sees `contracts.Brain`. `[models] agent` is a Claude alias, so it is not passed to Codex; `CodexSettings.model = None` lets the CLI choose its default model.
 
+7. **The model is offered only the shell (#57).** `CodexBrain.start()` runs `codex debug models --bundled` and clears the tool-adding fields on every model (`confine_catalog`). The fields and their new values are `tool_mode = null`, `multi_agent_version = null`, `experimental_supported_tools = []`, `supports_search_tool = false` and `apply_patch_tool_type = null`. The result goes to `models.json` in a fresh `mkdtemp` folder (0700 folder, 0600 file) outside the meeting folder, and every run loads it with `model_catalog_json`. `close()` deletes it. This costs once per meeting, not per trigger: the command took a median of 0.057 s over 5 runs here (Linux x86-64), for a 659 kB catalog. If the command fails or its output isn't a non-empty catalog of objects with a `slug`, `start()` raises `BrainError`, and Codex never runs with its default tools. The flags from decision 1 remove what the catalog doesn't: goals, multi-agent v1 and `request_user_input`. `code_mode`, `code_mode_only` and `multi_agent_v2` are off already on 0.159.1; disabling them explicitly keeps a future default change from bringing those tools back. What remains is `exec_command` plus `write_stdin`. These make up the unified-exec shell, which runs under the permission profile and is the shell this ADR accepts. `tests/brain/test_brain_codex_capture.py` checks this with the real CLI on every run where `codex` is installed.
+
 ## Consequences
 
 - **The OS minimum stays readable.** `:minimal` keeps system roots readable: `/etc` and `/usr` on Linux, the system paths on macOS. So `cat /etc/passwd` works, while `~/.ssh`, `~/Documents` and other meetings do not. These roots hold no user data and are world-readable anyway. Removing them would stop the shell from starting.
 - **The agent has a shell**, confined as above, instead of our three tools. It can run `rg`, `cat` and `ls` in the folder but can't write, reach the network or leave the folder's read scope. Our `brain.tools` limits (no regex in grep, size caps) do not apply to Codex.
 - **Process start is paid on every trigger.** The CLI's startup time counts against the 2–4 s LLM budget. There is no warm-up equivalent to Claude's `max_tokens: 0` request. OpenAI prompt caching is automatic on a byte-stable prefix. Codex's base instructions, tools and our developer instructions come first, then the append-only prefix, then the tail. Each run is a new thread, so the cache key differs per run; whether the prefix still hits the cache has to be measured.
 - **Version dependency, fail closed.** `default_permissions` profiles, `--ignore-rules` and `--ignore-user-config` must exist; they do in `rust-v0.159.1`. An older CLI might ignore the profile and fall back to its default exec sandbox, which can read the whole disk. So `CodexBrain.start()` runs `codex --version` and raises `BrainError` below `MIN_CLI_VERSION = 0.159.1`, or when no version can be read. A newer CLI that rejects a flag exits non-zero, which raises `BrainAPIError`. The network injection test below catches a newer CLI that changes semantics.
+- **The tool set depends on the catalog format (#57).** A newer CLI can add a catalog field that brings back a tool, or a feature that isn't catalog-driven. `test_brain_codex_capture.py` catches both when run against that CLI, and the JSONL allowlist catches whatever it reports. After any Codex upgrade, run the capture test before raising `MIN_CLI_VERSION`. A `--disable` for a feature the CLI no longer knows makes Codex exit non-zero, so a removed flag fails closed too.
+- **A model outside the bundled catalog** (e.g. `[brain] model` set to a newer slug) runs on Codex's fallback metadata. On 0.159.1 that offers the same two shell tools, plus a `Model metadata … not found` warning item that we log.
 - **Timeouts kill the whole process tree.** The CLI runs in its own session (process group). On timeout or cancellation, the group gets `SIGKILL`, so sandbox helpers and shell commands die with it. Otherwise an orphan holding the pipes would keep the answer waiting past its deadline.
 - A failure never stops capture: every error is a `BrainError` subclass, which the orchestrator logs as `AgentErrorLogged` (invariant 5).
 - **Revisit** if Codex ships an in-process SDK for Python with the same sandbox controls, or if measured startup latency breaks the budget. One alternative: point Codex at our `brain.tools` through an MCP server with the shell tool off (`features.shell_tool=false`).
+
+## Tools the model is offered (#57)
+
+Method, following the PR #55 review: `codex-cli 0.159.1` (`npm i -g @openai/codex@0.159.1`) ran the exact `CodexBrain.build_argv` output against a local fake Responses endpoint. The endpoint was set with `-c model_providers.fake={base_url="http://127.0.0.1:PORT/v1",wire_api="responses",env_key=…}` and `-c model_provider="fake"`. It logged each POST body. The table lists the tools in the body's `tools` array and in its `input[].type == "additional_tools"` item, with namespaces flattened. `CODEX_HOME` was empty, and the model was the CLI default (`gpt-6.1-sol`) unless noted.
+
+| Configuration | Tools in the request |
+|---|---|
+| #18 argv (before this change) | `functions.exec` (JavaScript in a V8 isolate; its nested tools are `exec_command`, `write_stdin`, `apply_patch`, `get_goal`, `create_goal`, `update_goal`, `clock__curr_time`), `functions.wait`, `functions.request_user_input`, `functions.request_user_input_async`, `clock.sleep`, `collaboration.spawn_agent`, `followup_task`, `send_message`, `list_agents`, `interrupt_agent`, `wait_agent` |
+| + any of: `--disable code_mode_host --disable goals --disable multi_agent --disable sleep_tool`; `--disable code_mode --disable code_mode_only`; `--disable multi_agent_v2`; `--disable multi_agent`; `-c code_mode.enabled=false`; `-c features.multi_agent_v2.enabled=false`; `-c sleep_tool.enabled=false` | unchanged |
+| + catalog with `tool_mode`, `multi_agent_version`, `experimental_supported_tools` cleared | `exec_command`, `write_stdin`, `request_user_input`, `apply_patch`, `get_goal`, `create_goal`, `update_goal`, `tool_search` |
+| + `supports_search_tool = false`, `apply_patch_tool_type = null`, `--disable goals` | `exec_command`, `write_stdin`, `request_user_input`, `multi_agent_v1.spawn_agent`, `send_input`, `resume_agent`, `wait_agent`, `close_agent` (these had been hidden behind `tool_search`) |
+| + `--disable multi_agent` | `exec_command`, `write_stdin`, `request_user_input` |
+| + `-c tools.experimental_request_user_input={enabled=false}`: **the argv in decision 1** | **`exec_command`, `write_stdin`** |
+| Decision 1 argv, `--model gpt-5.5` | `exec_command`, `write_stdin` |
+| Decision 1 argv, `--model sombra-unknown-model` (fallback metadata) | `exec_command`, `write_stdin` |
+
+With the catalog's `shell_type` set to `shell_command`, `local` or `default`, and with `--disable unified_exec`, the shell was still `exec_command` + `write_stdin`, so we leave `shell_type` alone.
+
+Forced tool calls (the fake endpoint's first reply is the call; the second request shows what the model got back):
+
+| Forced call | #18 argv | Decision 1 argv |
+|---|---|---|
+| `exec` (custom tool, `text("hi")`) | ran (`Script completed … hi`); **no JSONL item** | `unsupported custom tool call: exec` |
+| `collaboration.spawn_agent` | reached the handler; it failed only because `--ephemeral` leaves no rollout for the child; **no JSONL item** | `unsupported call: collaborationspawn_agent` |
+| `exec` calling `tools.exec_command` | `command_execution` item | tool not offered |
+| `exec_command {"cmd": "ls"}` | `command_execution` item | `command_execution` item |
+
+Found while doing this, out of #57's scope:
+
+- **Linux, npm install under `/opt`.** Every shell command failed with `bwrap: execvp …/codex-linux-x64/…/bin/codex: No such file or directory`. The sandbox helper lives outside the `:minimal` read roots. This fails closed, but it means the agent can't read the meeting folder. Needs a follow-up issue with a real `CODEX_HOME` (the capture used a temp one, where Codex refuses to create its helper aliases).
+- **The developer message lists Codex's bundled system skills** (`imagegen`, `openai-docs`, …, under `$CODEX_HOME/skills/.system`). No tool is attached to them, and the sandbox can't read that folder. They cost prompt tokens.
 
 ## Left for a human
 
@@ -82,6 +122,10 @@ Needs the Codex CLI (`npm i -g @openai/codex` or the release binary) and an Open
 CODEX_API_KEY=... uv run pytest -m network tests/brain/test_brain_codex_network.py -s
 CODEX_API_KEY=... ANTHROPIC_API_KEY=... \
     uv run pytest -m network tests/brain/test_brain_codex_network.py -s -k side_by_side
+# #57 with a ChatGPT login: the refreshed catalog must not override ours
+SOMBRA_CODEX_LOGIN=1 uv run pytest -m network tests/brain/test_brain_codex_network.py -s -k live_catalog
+# offline, no key: the request capture (already run for 0.159.1; rerun after any upgrade)
+uv run pytest tests/brain/test_brain_codex_capture.py -v
 ```
 
 | Check | Result |
@@ -91,3 +135,6 @@ CODEX_API_KEY=... ANTHROPIC_API_KEY=... \
 | Tokens (uncached / cache read / write / out) and cost per 5 answers, Codex vs Claude | *pending human run* (cost = tokens × the provider's price page on the day of the run) |
 | Injection: canary in `~` never read, nothing written outside, no forbidden item (`test_injection_reads_and_writes_nothing_outside`) | *pending human run* |
 | Codex CLI version used (must be ≥ 0.159.1; `start()` refuses older) | *pending human run* |
+| Request offers only `exec_command` + `write_stdin` (`test_brain_codex_capture.py`, offline) | **passed** on 0.159.1, Linux x86-64 (default model, `gpt-5.5`, unknown slug; forced `exec` and `spawn_agent` refused) |
+| Same capture on macOS | *pending human run* |
+| With a ChatGPT login, `codex debug models` + our catalog shows no tool fields, and a live answer asked to use `spawn_agent`/`exec` has no item off the allowlist (`test_live_catalog_and_run_offer_no_code_mode_or_subagents`) | *pending human run* |

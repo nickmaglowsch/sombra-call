@@ -19,6 +19,14 @@ Every answer is one ``codex exec --json`` process:
   switch Codex back to the legacy sandbox and silently drop the profile. User config, exec-policy
   rules, ``AGENTS.md``, web search and the image viewer are all off. Every flag
   comes from :func:`build_argv`, and nothing a caller passes can remove them.
+* **Only the shell tool.** Codex's bundled model catalog turns on code mode (a
+  JavaScript ``exec`` tool) and sub-agents per model, and no feature flag removes
+  them. :meth:`CodexBrain.start` writes a copy of the catalog with those fields
+  cleared (:func:`confine_catalog`) and every run loads it with
+  ``model_catalog_json``, so the request offers only ``exec_command`` and
+  ``write_stdin``.
+* **Fail closed on output.** Any JSONL event or item type outside
+  :data:`ALLOWED_EVENTS` / :data:`ALLOWED_ITEMS` voids the answer.
 * **No history.** ``--ephemeral`` writes no session file and every answer is a new
   process, so a frame reaches exactly one request (C6) and is never persisted
   outside ``frames/``.
@@ -35,7 +43,9 @@ import json
 import logging
 import os
 import re
+import shutil
 import signal
+import tempfile
 import time
 from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass, field
@@ -79,13 +89,42 @@ API_KEY_ENV = "CODEX_API_KEY"  # read by ``codex exec`` (codex-rs/login)
 # inherited, so no other secret in the parent environment reaches the agent's shell.
 PASSTHROUGH_ENV = ("PATH", "HOME", "USER", "LOGNAME", "LANG", "LC_ALL", "TMPDIR", "CODEX_HOME")
 
-# Item types that mean the agent tried to act outside a read-only shell in the
-# folder. The sandbox blocks them; seeing one still voids the answer.
-FORBIDDEN_ITEMS = frozenset({"file_change", "web_search", "mcp_tool_call", "collab_tool_call"})
+# JSONL event and item types proven inert (ADR 0018). Anything else, including a type a
+# newer CLI adds, voids the answer: ``file_change``, ``web_search``, ``mcp_tool_call``,
+# ``collab_tool_call``, ``todo_list`` and every unknown item fail closed. ``error`` items
+# are warnings (e.g. unknown model metadata) and carry only a message.
+ALLOWED_EVENTS = frozenset(
+    {
+        "thread.started",
+        "turn.started",
+        "turn.completed",
+        "turn.failed",
+        "item.started",
+        "item.updated",
+        "item.completed",
+        "error",
+    }
+)
+ALLOWED_ITEMS = frozenset({"agent_message", "reasoning", "command_execution", "error"})
+
+# Model-catalog fields that add tools on codex-cli 0.159.1 and the value that removes
+# them. ``tool_mode = "code_mode_only"`` swaps the shell for a JavaScript ``exec`` tool;
+# ``multi_agent_version`` adds ``spawn_agent`` & co.; ``experimental_supported_tools``
+# adds ``clock.sleep`` and async messaging; ``supports_search_tool`` adds ``tool_search``
+# (which also hides deferred sub-agent tools); ``apply_patch_tool_type`` adds the
+# ``apply_patch`` write tool. Verified by request capture (ADR 0018).
+CATALOG_OVERRIDES: Mapping[str, Any] = {
+    "tool_mode": None,
+    "multi_agent_version": None,
+    "experimental_supported_tools": [],
+    "supports_search_tool": False,
+    "apply_patch_tool_type": None,
+}
+CATALOG_FILE = "models.json"
 
 
 class BrainSandboxError(BrainError):
-    """The agent attempted a write, web search, MCP or sub-agent call."""
+    """Codex reported an event or item outside the proven-inert allowlist."""
 
     kind = "sandbox_violation"
 
@@ -211,8 +250,12 @@ def toml_str(value: str) -> str:
     return "".join(out)
 
 
-def sandbox_args(meeting_dir: Path) -> list[str]:
-    """The confinement flags. Always part of :func:`build_argv`; see the module docstring."""
+def sandbox_args(meeting_dir: Path, model_catalog: Path) -> list[str]:
+    """The confinement flags. Always part of :func:`build_argv`; see the module docstring.
+
+    ``model_catalog`` is the file :func:`confine_catalog` produced; see ADR 0018 for the
+    request capture that shows which tool each flag removes.
+    """
     folder = toml_str(str(meeting_dir))
     p = PERMISSION_PROFILE
     return [
@@ -236,6 +279,24 @@ def sandbox_args(meeting_dir: Path) -> list[str]:
         "features.view_image=false",
         "-c",
         "project_doc_max_bytes=0",
+        # Tools. The catalog removes code mode, sub-agents, sleep, tool_search and
+        # apply_patch; the rest remove goals, multi-agent v1 and request_user_input.
+        "-c",
+        f"model_catalog_json={toml_str(str(model_catalog))}",
+        "--disable",
+        "goals",
+        "--disable",
+        "multi_agent",
+        "-c",
+        "tools.experimental_request_user_input={enabled=false}",
+        # No effect on 0.159.1 (already off, or overridden by the catalog); they keep a
+        # future default flip from bringing code mode or sub-agents back.
+        "--disable",
+        "code_mode",
+        "--disable",
+        "code_mode_only",
+        "--disable",
+        "multi_agent_v2",
     ]
 
 
@@ -244,10 +305,11 @@ def build_argv(
     meeting_dir: Path,
     developer_instructions: str,
     frames: Sequence[Path],
+    model_catalog: Path,
 ) -> list[str]:
     """The full ``codex exec`` command line. The prompt itself goes on stdin (``-``)."""
     argv = [*settings.executable, "exec", "--json", "--color", "never"]
-    argv += sandbox_args(meeting_dir)
+    argv += sandbox_args(meeting_dir, model_catalog)
     argv += ["-c", f"developer_instructions={toml_str(developer_instructions)}"]
     if settings.reasoning_effort is not None:
         argv += ["-c", f"model_reasoning_effort={toml_str(settings.reasoning_effort)}"]
@@ -266,6 +328,29 @@ def process_env(api_key: str | None, base: Mapping[str, str] | None = None) -> d
     if api_key:
         env[API_KEY_ENV] = api_key
     return env
+
+
+def confine_catalog(raw: str) -> dict[str, Any]:
+    """Parse ``codex debug models --bundled`` and clear every tool-adding field.
+
+    Raises :class:`BrainError` when the output isn't a catalog, so a CLI that changes
+    the format stops the brain instead of running with its default tools.
+    """
+    try:
+        parsed = json.loads(raw)
+    except ValueError:
+        raise BrainError("Codex model catalog is not JSON") from None
+    catalog: dict[str, Any] = parsed if isinstance(parsed, dict) else {}
+    models = catalog.get("models")
+    if not isinstance(models, list) or not models:
+        raise BrainError("Codex model catalog has no models")
+    for model in models:
+        if not isinstance(model, dict) or not isinstance(model.get("slug"), str):
+            raise BrainError("Codex model catalog has an unexpected entry")
+        model.update(
+            {k: list(v) if isinstance(v, list) else v for k, v in CATALOG_OVERRIDES.items()}
+        )
+    return catalog
 
 
 # --- prompt flattening ---------------------------------------------------------------
@@ -300,7 +385,8 @@ class CodexRun:
     usage: Usage = field(default_factory=Usage)
     commands: list[str] = field(default_factory=list)  # shell commands the agent ran
     outputs: list[str] = field(default_factory=list)  # and what they printed
-    forbidden: list[dict[str, Any]] = field(default_factory=list)
+    forbidden: list[str] = field(default_factory=list)  # event/item types off the allowlist
+    warnings: list[str] = field(default_factory=list)  # ``error`` items (non-fatal)
     errors: list[str] = field(default_factory=list)
     completed: bool = False
 
@@ -328,7 +414,8 @@ def usage_from_codex(raw: Mapping[str, Any]) -> Usage:
 
 
 def parse_events(stdout: str) -> CodexRun:
-    """Read the JSONL stream; unknown events and non-JSON lines are ignored."""
+    """Read the JSONL stream. Non-JSON lines are ignored; event and item types off the
+    allowlist are collected in :attr:`CodexRun.forbidden`."""
     run = CodexRun()
     for line in stdout.splitlines():
         try:
@@ -338,16 +425,29 @@ def parse_events(stdout: str) -> CodexRun:
         if not isinstance(event, dict):
             continue
         kind = event.get("type")
-        if kind == "turn.completed":
+        if kind not in ALLOWED_EVENTS:
+            run.forbidden.append(f"event {kind!r}")
+        elif kind in ("item.started", "item.updated"):
+            _check_item(run, event.get("item"))
+        elif kind == "turn.completed":
             run.completed = True
             run.usage = _add(run.usage, usage_from_codex(event.get("usage") or {}))
         elif kind == "turn.failed":
             run.errors.append(str((event.get("error") or {}).get("message", "turn failed")))
         elif kind == "error":
             run.errors.append(str(event.get("message", "error")))
-        elif kind == "item.completed":
-            _item(run, event.get("item") or {})
+        elif kind == "item.completed" and _check_item(run, event.get("item")):
+            _item(run, event["item"])
     return run
+
+
+def _check_item(run: CodexRun, item: object) -> bool:
+    """True when ``item`` is an allowed item; otherwise record it as forbidden."""
+    kind = item.get("type") if isinstance(item, dict) else None
+    if kind in ALLOWED_ITEMS:
+        return True
+    run.forbidden.append(f"item {kind!r}")
+    return False
 
 
 def _item(run: CodexRun, item: dict[str, Any]) -> None:
@@ -357,8 +457,8 @@ def _item(run: CodexRun, item: dict[str, Any]) -> None:
     elif kind == "command_execution":
         run.commands.append(str(item.get("command", "")))
         run.outputs.append(str(item.get("aggregated_output", "")))
-    elif kind in FORBIDDEN_ITEMS:
-        run.forbidden.append(item)
+    elif kind == "error":
+        run.warnings.append(str(item.get("message", "")))
 
 
 def _add(a: Usage, b: Usage) -> Usage:
@@ -402,6 +502,7 @@ class CodexBrain:
         self._tools: MeetingTools | None = None
         self._prefix: PrefixSource | None = None
         self._transcript_offset = 0
+        self._catalog_dir: Path | None = None
         self._lock = asyncio.Lock()
         self.last_run: CodexRun | None = None  # the last process's events, for audit
 
@@ -411,11 +512,19 @@ class CodexBrain:
             raise BrainError("brain not started")
         return self._tools.root
 
+    @property
+    def model_catalog(self) -> Path:
+        """The tool-free model catalog every run loads (written by :meth:`start`)."""
+        if self._catalog_dir is None:
+            raise BrainError("brain not started")
+        return self._catalog_dir / CATALOG_FILE
+
     async def start(self, meeting_dir: Path) -> None:
         """Check the CLI version, bind to the meeting folder, load the transcript. No API call."""
         s = self.settings
         tools = MeetingTools(meeting_dir)
         await self._check_version(tools.root)
+        await self._write_catalog(tools.root)
         self._tools = tools
         system = self._prompt.system_prompt(s.user_name, s.aliases, s.allowed_topics, s.level)
         self._prefix = self._prompt.prefix_builder(self._tools.root, system)
@@ -436,7 +545,8 @@ class CodexBrain:
                 raise BrainTimeoutError(f"no answer within {s.timeout_s:g} s") from None
 
     async def close(self) -> None:
-        """Nothing to release: each answer's process has already exited."""
+        """Remove the model catalog; each answer's process has already exited."""
+        self._drop_catalog()
 
     # --- internals -------------------------------------------------------------------
 
@@ -451,6 +561,33 @@ class CodexBrain:
             found = result.stdout.strip() or result.stderr.strip() or "unknown"
             need = ".".join(map(str, MIN_CLI_VERSION))
             raise BrainError(f"Codex CLI {need} or newer is required (found: {found[:100]})")
+
+    async def _write_catalog(self, cwd: Path) -> None:
+        """Write the tool-free model catalog every run loads (see :data:`CATALOG_OVERRIDES`).
+
+        It lives in a private temp folder, outside the meeting folder and so outside
+        what the agent's sandbox can read.
+        """
+        argv = [*self.settings.executable, "debug", "models", "--bundled"]
+        result = await self._runner.run(
+            argv, stdin="", env=process_env(None), cwd=cwd, timeout_s=self.settings.timeout_s
+        )
+        if result.returncode != 0:
+            detail = (result.stderr.strip() or result.stdout.strip() or "no output")[:200]
+            raise BrainError(f"could not read the Codex model catalog: {detail}")
+        catalog = confine_catalog(result.stdout)
+        self._drop_catalog()
+        folder = Path(tempfile.mkdtemp(prefix="sombra-codex-"))  # 0700
+        path = folder / CATALOG_FILE
+        fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+        with os.fdopen(fd, "w", encoding="utf-8") as f:
+            json.dump(catalog, f)
+        self._catalog_dir = folder
+
+    def _drop_catalog(self) -> None:
+        if self._catalog_dir is not None:
+            shutil.rmtree(self._catalog_dir, ignore_errors=True)
+            self._catalog_dir = None
 
     def _require_prefix(self) -> PrefixSource:
         if self._prefix is None:
@@ -533,7 +670,7 @@ class CodexBrain:
             raise BrainError(f"could not build the prompt tail: {e}") from None
         req = self._prompt.render_request(prefix, tail, model=s.model or "", max_tokens=0)
         developer, prompt = flatten_request(req)
-        argv = build_argv(s, self.meeting_dir, developer, frames)
+        argv = build_argv(s, self.meeting_dir, developer, frames, self.model_catalog)
         remaining = deadline - time.monotonic()
         if remaining <= 0:
             raise BrainTimeoutError(f"no answer within {s.timeout_s:g} s")
@@ -545,9 +682,11 @@ class CodexBrain:
         self.last_run = run
         if run.commands:
             log.info("codex ran %d read-only command(s) in the meeting folder", len(run.commands))
+        for warning in run.warnings:
+            log.warning("codex: %s", warning[:300])
         if run.forbidden:
-            kinds = sorted({str(i.get("type")) for i in run.forbidden})
-            raise BrainSandboxError(f"agent attempted a forbidden action: {', '.join(kinds)}")
+            kinds = ", ".join(sorted(set(run.forbidden)))
+            raise BrainSandboxError(f"Codex reported an action outside the allowlist: {kinds}")
         if run.errors and not run.completed:
             raise _error_for(run.errors[-1])
         if result.returncode != 0:
