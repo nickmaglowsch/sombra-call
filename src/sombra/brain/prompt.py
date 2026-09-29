@@ -19,7 +19,7 @@ Invariants (CONTRIBUTING.md gate 4):
 
 Prefix layout (``blocks()``)::
 
-    [0] system prompt                       -> request ``system``
+    [0] system prompt                       -> request ``system`` (fixed cache breakpoint)
     [1] context/ index + small text files   (fixed cache breakpoint)
     [2] epoch summary                       (only after ``start_epoch``)
     [3..] transcript chunks, one per flush  (moving cache breakpoint on the last)
@@ -125,7 +125,8 @@ def system_prompt(
     name = _one_line(user_name)
     alias_list: list[str] = []
     for alias in (_one_line(a) for a in aliases):
-        if alias and alias.casefold() != name.casefold() and alias not in alias_list:
+        seen = {name.casefold(), *(a.casefold() for a in alias_list)}
+        if alias and alias.casefold() not in seen:
             alias_list.append(alias)
     topics = [_one_line(t) for t in allowed_topics if _one_line(t)]
     if topics:
@@ -179,12 +180,16 @@ def _context_index(meeting_dir: Path, max_file_bytes: int, max_total_bytes: int)
     budget = max_total_bytes
     for path in files:
         rel = f"context/{path.relative_to(root).as_posix()}"
-        size = path.stat().st_size
+        try:
+            size = path.stat().st_size
+        except OSError:  # vanished or unreadable: list it, never fail brain start
+            listing.append(f"- {rel} (ilegível, não incluído)")
+            continue
         text: str | None = None
         if path.suffix.lower() in TEXT_SUFFIXES and size <= min(max_file_bytes, budget):
             try:
                 text = path.read_text(encoding="utf-8")
-            except UnicodeDecodeError:
+            except (OSError, UnicodeDecodeError):
                 text = None
         if text is None:
             listing.append(f"- {rel} ({size} bytes, não incluído; leia o arquivo se precisar)")
@@ -233,7 +238,9 @@ class PrefixBuilder:
         """Replace the transcript so far with its summary: the planned cache miss (C4).
 
         Entries buffered but not yet sealed by ``blocks()`` are covered by the summary
-        too, so they are dropped with the rest.
+        too, so they are dropped with the rest. Caller contract: lines that arrived
+        while the summary was being generated (so are not in it) must be passed to
+        ``add_transcript`` *after* this call, or they are lost from the prefix.
         """
         self._epoch += 1
         self._summary = _text_block(wrap_data("resumo", summary_md, epoca=str(self._epoch)))
@@ -252,7 +259,11 @@ class PrefixBuilder:
         if self._summary is not None:
             out.append(copy.deepcopy(self._summary))
         out.extend(copy.deepcopy(chunk) for chunk in self._chunks)
-        out[1]["cache_control"] = dict(_CACHE_CONTROL)  # system+context: survives epochs
+        # Fixed breakpoints: the system block survives anything in messages (adding or
+        # removing tail images invalidates the messages-tier cache); system+context
+        # survive epochs. Plus the moving marker: 3 of the API's 4 breakpoints.
+        out[0]["cache_control"] = dict(_CACHE_CONTROL)
+        out[1]["cache_control"] = dict(_CACHE_CONTROL)
         out[-1]["cache_control"] = dict(_CACHE_CONTROL)  # moving marker
         return out
 
@@ -279,7 +290,7 @@ def build_tail(trigger: TriggerEvent, frame_paths: Sequence[Path]) -> list[dict[
         media_type = _IMAGE_MEDIA_TYPES.get(Path(path).suffix.lower())
         if media_type is None:
             raise ValueError(f"unsupported frame type: {path}")
-        tail.append(_text_block(f"Imagem da tela {_frame_label(Path(path))}:"))
+        tail.append(_text_block(f"Imagem da tela {escape_data(_frame_label(Path(path)))}:"))
         tail.append(
             {
                 "type": "image",

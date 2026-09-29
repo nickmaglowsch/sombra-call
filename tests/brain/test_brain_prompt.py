@@ -114,6 +114,7 @@ def test_prefix_is_append_only_within_an_epoch(tmp_path: Path, seed: int) -> Non
         assert _bytes(_strip_last_marker(current))[len(before) - 1] == before[-1]
         assert len(current) - len(previous) in (0, 1)
         assert "cache_control" in current[-1]
+        assert "cache_control" in current[0]
         assert "cache_control" in current[1]
         assert sum("cache_control" in b for b in current) <= 4
         previous = current
@@ -133,7 +134,7 @@ def test_prefix_layout(tmp_path: Path) -> None:
     builder = PrefixBuilder(tmp_path, "SISTEMA")
     blocks = builder.blocks()
     assert [b["type"] for b in blocks] == ["text", "text"]
-    assert blocks[0] == {"type": "text", "text": "SISTEMA"}
+    assert blocks[0] == {"type": "text", "text": "SISTEMA", "cache_control": {"type": "ephemeral"}}
     assert "Nenhum arquivo em context/." in blocks[1]["text"]
 
     builder.add_transcript([_speech(1, "vamos começar"), _speech(2, "ok", Channel.ME)])
@@ -220,6 +221,36 @@ def test_context_total_budget_and_freeze(tmp_path: Path) -> None:
     assert builder.blocks()[1]["text"] == text  # read once: prefix stays stable
 
 
+def test_context_survives_unreadable_files(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    ctx = tmp_path / "context"
+    ctx.mkdir()
+    (ctx / "sumiu.md").write_text("apagado entre rglob e stat")
+    (ctx / "trancado.md").write_text("sem permissão")
+    (ctx / "ok.md").write_text("legível")
+    real_stat, real_read = Path.stat, Path.read_text
+
+    stat_calls: list[str] = []
+
+    def fake_stat(self: Path, **kwargs: Any) -> os.stat_result:
+        if not kwargs:  # plain stat(): is_file() first, then the size lookup
+            stat_calls.append(self.name)
+        if not kwargs and stat_calls.count("sumiu.md") > 1 and self.name == "sumiu.md":
+            raise FileNotFoundError(self)
+        return real_stat(self, **kwargs)
+
+    def fake_read(self: Path, *args: Any, **kwargs: Any) -> str:
+        if self.name == "trancado.md":
+            raise PermissionError(self)
+        return real_read(self, *args, **kwargs)
+
+    monkeypatch.setattr(Path, "stat", fake_stat)
+    monkeypatch.setattr(Path, "read_text", fake_read)
+    text = PrefixBuilder(tmp_path, "s").blocks()[1]["text"]
+    assert "- context/sumiu.md (ilegível, não incluído)" in text
+    assert "- context/trancado.md (" in text and "sem permissão" not in text
+    assert "legível\n</dados>" in text
+
+
 @pytest.mark.skipif(not hasattr(os, "symlink"), reason="needs symlinks")
 def test_context_skips_symlinks(tmp_path: Path) -> None:
     outside = tmp_path / "fora.md"
@@ -263,6 +294,9 @@ def test_tail_label_falls_back_to_file_name(tmp_path: Path) -> None:
     path = tmp_path / "captura.jpeg"
     path.write_bytes(JPEG)
     assert build_tail(_trigger([]), [path])[1]["text"] == "Imagem da tela captura.jpeg:"
+    odd = tmp_path / "a<b>.png"
+    odd.write_bytes(JPEG)
+    assert build_tail(_trigger([]), [odd])[1]["text"] == "Imagem da tela a&lt;b&gt;.png:"
 
 
 def test_tail_rejects_more_than_three_frames(tmp_path: Path) -> None:
@@ -381,6 +415,8 @@ def test_system_prompt_levels_and_determinism(level: AutonomyLevel) -> None:
     assert f"Nível {level.value}" in a
     assert "Quando alguém chama Ana Maria, você" in a
     assert "Nenhuma lista de temas" in a
+    dedup = system_prompt("Nick", ["nick", "Nic", "nic", " NIC "], [], level)
+    assert "Quando alguém chama Nick (também chamado de Nic), você" in dedup
     assert "$" not in a
 
 
@@ -403,7 +439,9 @@ def test_render_request_shape(tmp_path: Path) -> None:
 
     assert request["model"] == "claude-opus-5-5"
     assert request["max_tokens"] == 512
-    assert request["system"] == [{"type": "text", "text": "SISTEMA"}]
+    assert request["system"] == [
+        {"type": "text", "text": "SISTEMA", "cache_control": {"type": "ephemeral"}}
+    ]
     assert request["messages"] == [{"role": "user", "content": [*prefix[1:], *tail]}]
     # tail comes after the last cache breakpoint, so it never invalidates the cache
     content = request["messages"][0]["content"]
