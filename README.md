@@ -85,6 +85,8 @@ uv run sombra minutes <meeting>   # (re)generate the minutes; see docs/summary.m
 
 Configuration (user config, profiles, `sombra new`, `sombra profiles list`) is documented in [`docs/config.md`](docs/config.md).
 
+After a meeting, `sombra ask latest "O que combinamos sobre o prazo?"` answers from the transcript with `[HH:MM:SS]` references; see [`docs/ask.md`](docs/ask.md).
+
 Tests that need real devices, models, OS permissions or a real API are marked `hardware` or `network` and are skipped by default. Run them explicitly: `uv run pytest -m hardware`.
 
 ## Contributing
