@@ -26,6 +26,8 @@ A PR merges only when every gate below passes. Gates 1–2 are enforced by CI; g
 
 Never skip, xfail or delete a test to get green. Never lower the coverage threshold in a feature PR.
 
+`main` is protected by the ruleset in `.github/rulesets/main.json`: no direct pushes, changes land only through squash-merged PRs, and `check (ubuntu-latest)`, `check (macos-14)` and `pr-hygiene` must pass on a branch that is up to date with `main`. If you rename a CI job, update the ruleset in the same PR, or every PR is blocked on a check that never reports.
+
 ## Gate 2: Scope and contracts (automated + review)
 
 - The diff stays inside the package(s) the issue names, plus tests and docs.
