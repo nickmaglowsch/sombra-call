@@ -17,6 +17,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import threading
 from collections.abc import AsyncIterator, Awaitable, Callable, Sequence
 from dataclasses import dataclass, field
 from datetime import datetime
@@ -30,6 +31,7 @@ from sombra.contracts import (
     Brain,
     BrainRequest,
     BrainResponse,
+    Channel,
     FrameMarker,
     FramePipeline,
     FrameRecord,
@@ -55,8 +57,12 @@ from sombra.summary.minutes import SUMMARY_FILE
 from sombra.transcription import (
     SILERO_VAD,
     WHISPER_MODELS,
+    HallucinationFilter,
+    SpeechToText,
     TranscriptionSettings,
+    WhisperSettings,
     WhisperTranscriber,
+    build_initial_prompt,
     default_models_dir,
     whisper_model,
 )
@@ -265,6 +271,23 @@ def check_models(stt_model: str, models_dir: Path | None = None) -> str:
     return model
 
 
+# pywhispercpp loads a model inside ``redirect_stderr``, which ``dup2``s the process-wide
+# stderr fd. The transcriber loads one engine per channel on two threads at once, and two
+# overlapping redirects restore the wrong fd (EBADF on stderr / pytest's capture fds).
+# Loading one engine at a time avoids it. See issue #48.
+_ENGINE_LOAD = threading.Lock()
+
+
+def one_at_a_time(load: Callable[[], SpeechToText]) -> Callable[[Channel], SpeechToText]:
+    """A per-channel STT factory that never runs two ``load()`` calls at once."""
+
+    def factory(_channel: Channel) -> SpeechToText:
+        with _ENGINE_LOAD:
+            return load()
+
+    return factory
+
+
 def build_transcriber(
     stt_model: str,
     *,
@@ -273,16 +296,33 @@ def build_transcriber(
     n_threads: int = 4,
     use_gpu: bool = True,
 ) -> WhisperTranscriber:
-    """Silero VAD + whisper.cpp; the user's names go in Whisper's prompt (T4)."""
+    """Silero VAD + whisper.cpp; the user's names go in Whisper's prompt (T4).
+
+    Same parts as ``WhisperTranscriber.from_settings``, except that the whisper engines
+    are loaded one at a time (see ``_ENGINE_LOAD``).
+    """
+    from sombra.transcription.silero import SileroVad
+    from sombra.transcription.whisper import PyWhisperCppEngine
+
     model = check_models(stt_model, models_dir)
-    settings = TranscriptionSettings(
-        model=model,
-        models_dir=models_dir,
-        vocabulary=tuple(vocabulary),
+    directory = models_dir or default_models_dir()
+    prompt = build_initial_prompt(vocabulary)
+    settings = TranscriptionSettings(model=model, models_dir=directory)
+    whisper = WhisperSettings(
+        model_path=directory / whisper_model(model).filename,
+        language=settings.language,
+        initial_prompt=prompt,
         n_threads=n_threads,
         use_gpu=use_gpu,
     )
-    return WhisperTranscriber.from_settings(settings)
+
+    vad_path = directory / SILERO_VAD.filename
+    return WhisperTranscriber(
+        detector_factory=lambda _channel: SileroVad(vad_path),
+        stt_factory=one_at_a_time(lambda: PyWhisperCppEngine(whisper)),
+        vad=settings.vad,
+        text_filter=HallucinationFilter(prompt=prompt),
+    )
 
 
 def build_detector(name: str, aliases: Sequence[str]) -> TriggerDetector:

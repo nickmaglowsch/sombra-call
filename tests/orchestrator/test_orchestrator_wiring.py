@@ -46,7 +46,9 @@ from sombra.orchestrator.wiring import (
     agent_model,
     build_agent_brain,
     build_detector,
+    build_transcriber,
     key_provider,
+    one_at_a_time,
     resolve_claude_model,
     resolve_whisper_model,
 )
@@ -79,6 +81,40 @@ def test_pause_adapter_reads_the_controller() -> None:
     assert adapter.is_paused() is False
     controller.pause()
     assert adapter.is_paused() is True
+
+
+def test_whisper_engines_load_one_at_a_time() -> None:
+    import threading
+    import time
+
+    active, peak = 0, 0
+    guard = threading.Lock()
+
+    def load() -> object:
+        nonlocal active, peak
+        with guard:
+            active += 1
+            peak = max(peak, active)
+        time.sleep(0.05)
+        with guard:
+            active -= 1
+        return object()
+
+    factory = one_at_a_time(load)  # type: ignore[arg-type]
+    threads = [threading.Thread(target=factory, args=(ch,)) for ch in Channel]
+    for t in threads:
+        t.start()
+    for t in threads:
+        t.join()
+    assert peak == 1
+
+
+def test_build_transcriber_checks_the_models(tmp_path: Path) -> None:
+    with pytest.raises(FileNotFoundError, match=r"download_models\.py tiny"):
+        build_transcriber("tiny", models_dir=tmp_path)
+    for name in ("ggml-tiny.bin", "silero_vad.onnx"):
+        (tmp_path / name).write_bytes(b"")
+    assert build_transcriber("tiny", vocabulary=["Maria"], models_dir=tmp_path) is not None
 
 
 def test_detector_needs_a_name_else_never_fires() -> None:
@@ -211,7 +247,7 @@ async def test_assembly_close_keeps_going_after_a_failure(tmp_path: Path) -> Non
 
 def _plan(tmp_path: Path, level: AutonomyLevel, key: bool = False) -> LivePlan:
     meeting = _meeting(tmp_path)
-    cfg = UserConfig(meetings_root=tmp_path, user=UserIdentity(name="Mariana"))
+    cfg = UserConfig(meetings_root=tmp_path, user=UserIdentity(name="Maria"))
     return LivePlan(
         meeting_dir=meeting,
         started_at=T0,
@@ -273,7 +309,7 @@ async def test_run_live_records_until_stopped(tmp_path: Path) -> None:
     events = [json.loads(x) for x in (plan.meeting_dir / "log.jsonl").read_text().splitlines()]
     assert [e["type"] for e in events] == ["trigger"]  # L0: logged, never answered
     transcript = (plan.meeting_dir / "transcript.md").read_text()
-    assert "OUTROS: Mariana, o que você acha desse gráfico aqui?" in transcript
+    assert "OUTROS: Maria, você pode explicar este gráfico na tela?" in transcript
     assert not (tmp_path / "run" / "control.sock").exists()  # closed with the session
 
 

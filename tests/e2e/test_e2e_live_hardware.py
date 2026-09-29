@@ -33,7 +33,7 @@ pytestmark = [
 async def test_live_capture_records_speech_and_frames(tmp_path: Path) -> None:
     started = datetime.now().astimezone()
     meeting = create_meeting(tmp_path, "live smoke", started_at=started)
-    cfg = UserConfig(meetings_root=tmp_path, user=UserIdentity(name="Mariana"))
+    cfg = UserConfig(meetings_root=tmp_path, user=UserIdentity(name="Maria"))
     plan = LivePlan(meeting_dir=meeting, started_at=started, config=cfg, level=AutonomyLevel.L0)
     stop = StopSignal()
 
@@ -45,7 +45,7 @@ async def test_live_capture_records_speech_and_frames(tmp_path: Path) -> None:
     await run_live(
         plan,
         stop,
-        transcriber=build_transcriber(cfg.models.stt, vocabulary=["Mariana"]),
+        transcriber=build_transcriber(cfg.models.stt, vocabulary=["Maria"]),
         control_socket=tmp_path / "control.sock",
     )
     await stopper

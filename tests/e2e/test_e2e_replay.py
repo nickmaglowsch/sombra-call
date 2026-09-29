@@ -2,7 +2,8 @@
 
 Silero VAD + whisper.cpp ``tiny`` transcribe two WAVs (eSpeak voices, see
 ``tests/fixtures/e2e/make_fixture.py``); a slide screenshot goes through dedupe; the
-real trigger detector must notice "Mariana, o que você acha desse gráfico aqui?"; the
+real trigger detector must notice "Maria, você pode explicar este gráfico na tela?"
+(or its second phrasing; the cooldown lets one fire); the
 scripted brain answers with the slide attached and the auto-approving UI approves.
 Only the model API and the overlay window are stand-ins.
 
@@ -32,7 +33,7 @@ from sombra.store import read_started_at
 from sombra.transcription import SILERO_VAD, ensure_model, whisper_model
 
 FIXTURE = Path(__file__).resolve().parents[1] / "fixtures" / "e2e"
-USER = "Mariana"
+USER = "Maria"
 
 
 @pytest.fixture(scope="module")

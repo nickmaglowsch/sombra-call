@@ -21,7 +21,7 @@ def parse(*argv: str) -> argparse.Namespace:
 
 
 def write_config(
-    tmp_path: Path, name: str = "Mariana", level: str = "L2", backend: str = "claude"
+    tmp_path: Path, name: str = "Maria", level: str = "L2", backend: str = "claude"
 ) -> Path:
     path = tmp_path / "config.toml"
     path.write_text(
@@ -245,7 +245,7 @@ def test_replay_cli_end_to_end_with_fake_models(tmp_path: Path, monkeypatch: Any
         "--name",
         "Vendas",
         "--user",
-        "Mariana",
+        "Maria",
     )
     assert code == 0, err
     meeting = Path(out.splitlines()[0])

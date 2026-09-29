@@ -27,9 +27,10 @@ from sombra.store import read_started_at
 from sombra.transcription import WhisperTranscriber
 
 FIXTURE = Path(__file__).resolve().parents[1] / "fixtures" / "e2e"
-QUESTION = "Mariana, o que você acha desse gráfico aqui?"
+QUESTION = "Maria, você pode explicar este gráfico na tela?"
+QUESTION_2 = "Maria, o que você acha desse gráfico aqui?"  # cooldown: no 2nd trigger
 SCRIPT = {
-    Channel.OTHERS: ["Vou compartilhar o gráfico de vendas do trimestre.", QUESTION],
+    Channel.OTHERS: ["Vou compartilhar o gráfico de vendas do trimestre.", QUESTION, QUESTION_2],
     Channel.ME: ["Bom dia a todos."],
 }
 
@@ -63,7 +64,7 @@ def options(tmp_path: Path, **kw: object) -> ReplayOptions:
         "others": FIXTURE / "others.wav",
         "frames": FIXTURE / "frames",
         "meetings_root": tmp_path,
-        "user_name": "Mariana",
+        "user_name": "Maria",
         "name": "Replay e2e",
     }
     return ReplayOptions(**{**base, **kw})  # type: ignore[arg-type]
@@ -105,7 +106,7 @@ async def test_replay_writes_transcript_frames_trigger_suggestion_and_action(
     trigger, suggestion, action = events
     assert trigger["question"] == QUESTION
     assert trigger["needs_screen"] is True
-    assert trigger["matched_alias"] == "Mariana"
+    assert trigger["matched_alias"] == "Maria"
     assert suggestion["trigger_id"] == trigger["trigger_id"]
     assert suggestion["frames_sent"] == ["f0001"]
     assert suggestion["backend"] == "scripted"

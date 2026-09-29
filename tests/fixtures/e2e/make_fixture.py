@@ -7,41 +7,68 @@ from the repo root::
 
 Writes (16 kHz mono s16le WAVs, total well under 1 MB)::
 
-    others.wav   1.0 s silence, OTHERS_1, 1.5 s silence, QUESTION, 1.5 s silence
+    others.wav   1.0 s silence, OTHERS_1, 1.5 s, QUESTIONS[0], 1.5 s, QUESTIONS[1], 1.5 s
     me.wav       1.0 s silence, ME_1, 1.0 s silence
     frames/1790703000000.png + .json   the slide (2026-09-29 17:30:00 UTC), shown first
     frames/1790703002000.png + .json   the same slide 2 s later (dedupe drops it)
+
+Whisper ``tiny`` on eSpeak is rough (CI heard "Mariana, o que você acha" as "Maria da
+Boquivoca, Acha"), so the user is called twice, with two phrasings and slower speech.
+Either line is enough for a trigger; the detector's cooldown (G5) lets only one fire.
 """
 
 from __future__ import annotations
 
-import importlib.util
+import ctypes
 import json
 import wave
 from pathlib import Path
+from typing import Any
 
 import numpy as np
 from PIL import Image, ImageDraw
 
 HERE = Path(__file__).resolve().parent
 SR = 16_000
-USER = "Mariana"
+WPM = 115  # eSpeak words per minute; slower than the default for whisper tiny
+USER = "Maria"
 OTHERS_1 = "Vou compartilhar o gráfico de vendas do trimestre."
-QUESTION = f"{USER}, o que você acha desse gráfico aqui?"
+QUESTIONS = (
+    f"{USER}, você pode explicar este gráfico na tela?",
+    f"{USER}, o que você acha desse gráfico aqui?",
+)
 ME_1 = "Bom dia a todos."
 FRAME_MS = (1_790_703_000_000, 1_790_703_002_000)
 SIDECAR = {"app": "zoom.us", "window_title": "Zoom - Vendas Q3"}
 
+_CALLBACK = ctypes.CFUNCTYPE(
+    ctypes.c_int, ctypes.POINTER(ctypes.c_short), ctypes.c_int, ctypes.c_void_p
+)
+
 
 def _synth(text: str) -> np.ndarray:
-    # The eSpeak binding already written for the transcription fixture.
-    path = HERE.parent / "transcription" / "make_fixture.py"
-    spec = importlib.util.spec_from_file_location("_tx_fixture", path)
-    assert spec is not None and spec.loader is not None
-    module = importlib.util.module_from_spec(spec)
-    spec.loader.exec_module(module)
-    out: np.ndarray = module._synth(text)
-    return out
+    import espeakng_loader  # type: ignore[import-not-found]  # dev-only helper
+
+    lib = ctypes.CDLL(espeakng_loader.get_library_path())
+    data = espeakng_loader.get_data_path().encode()
+    rate = lib.espeak_Initialize(2, 0, data, 0)  # AUDIO_OUTPUT_SYNCHRONOUS
+    samples: list[int] = []
+
+    def on_audio(wav: Any, n: int, _events: object) -> int:
+        if wav and n > 0:
+            samples.extend(wav[:n])
+        return 0
+
+    cb = _CALLBACK(on_audio)
+    lib.espeak_SetSynthCallback(cb)
+    lib.espeak_SetVoiceByName(b"pt-br")
+    lib.espeak_SetParameter(1, WPM, 0)  # espeakRATE
+    raw = text.encode()
+    lib.espeak_Synth(raw, len(raw) + 1, 0, 1, 0, 1, None, None)  # POS_CHARACTER, CHARS_UTF8
+    lib.espeak_Synchronize()
+    pcm = np.asarray(samples, dtype=np.float32) / 32768.0
+    t_out = np.arange(int(len(pcm) * SR / rate)) / SR
+    return np.interp(t_out, np.arange(len(pcm)) / rate, pcm).astype(np.float32)
 
 
 def _write_wav(path: Path, parts: list[np.ndarray]) -> None:
@@ -76,7 +103,15 @@ def main() -> None:
 
     _write_wav(
         HERE / "others.wav",
-        [silence(1.0), _synth(OTHERS_1), silence(1.5), _synth(QUESTION), silence(1.5)],
+        [
+            silence(1.0),
+            _synth(OTHERS_1),
+            silence(1.5),
+            _synth(QUESTIONS[0]),
+            silence(1.5),
+            _synth(QUESTIONS[1]),
+            silence(1.5),
+        ],
     )
     _write_wav(HERE / "me.wav", [silence(1.0), _synth(ME_1), silence(1.0)])
 
