@@ -80,6 +80,8 @@ make setup   # uv sync
 make check   # lint + format check + mypy --strict + tests with coverage (what CI runs)
 make fmt     # auto-fix lint and formatting
 uv run sombra --version
+uv run sombra start "Daily"       # a live meeting (macOS); see docs/usage.md
+uv run sombra replay me.wav others.wav --fake-brain --auto-approve   # the pipeline on files
 uv run sombra minutes <meeting>   # (re)generate the minutes; see docs/summary.md
 ```
 
