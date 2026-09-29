@@ -8,11 +8,14 @@ Local streaming speech-to-text for both channels (PRD T1, T2, T4). Design choice
 Models are not in git. Download them once (about 600 MB for the default):
 
 ```sh
-uv run python scripts/download_models.py                 # large-v3-turbo-q5_0 + Silero VAD
-uv run python scripts/download_models.py small-q5_1      # a lighter fallback
-uv run python scripts/download_models.py --list          # everything known, with sizes
-uv run python scripts/download_models.py tiny --dir /tmp/models
+sombra models download                  # large-v3-turbo-q5_0 + Silero VAD
+sombra models download small-q5_1       # a lighter fallback
+sombra models list                      # everything known, with sizes, present/missing
+sombra models download tiny --dir /tmp/models
 ```
+
+The installer runs the first command for you ([install.md](install.md)). In a dev checkout,
+prefix with `uv run`; `scripts/download_models.py` does the same.
 
 Files land in `~/.cache/sombra/models/`. Each download is pinned to a fixed upstream
 revision and checked against its SHA-256; a mismatch deletes the file and fails.

@@ -87,6 +87,8 @@ sombra new "Daily time X"                    # prints ~/Sombra/meetings/2026-09-
 sombra new "Planning" --profile planning     # also copies the profile's context into context/
 sombra new "x" --config ./other-config.toml  # use another user config file
 sombra profiles list                         # one profile per line: name<TAB>description
+sombra config init                           # write config.toml with every default, if there is none
+sombra config path                           # print the user config path
 ```
 
 `sombra new` creates the folder described in [ARCHITECTURE.md](ARCHITECTURE.md#meeting-folder): `meeting.toml`, `context/`, an empty `transcript.md`, `frames/index.jsonl` and `log.jsonl`. If the folder name is already taken, it adds `-2`, `-3`, and so on.
