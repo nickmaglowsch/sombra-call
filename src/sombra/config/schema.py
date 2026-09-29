@@ -54,6 +54,14 @@ class ModelsConfig:
     summary: str = "haiku"  # rolling summary / minutes model alias
 
 
+BRAIN_BACKENDS = ("claude", "codex")
+
+
+@dataclass(frozen=True, slots=True)
+class BrainConfig:
+    backend: str = "claude"  # which agent answers: one of BRAIN_BACKENDS (C5)
+
+
 @dataclass(frozen=True, slots=True)
 class UserConfig:
     """``~/.config/sombra/config.toml``. A missing file means all defaults."""
@@ -65,6 +73,7 @@ class UserConfig:
     retention: RetentionConfig = field(default_factory=RetentionConfig)
     audio: AudioConfig = field(default_factory=AudioConfig)
     models: ModelsConfig = field(default_factory=ModelsConfig)
+    brain: BrainConfig = field(default_factory=BrainConfig)
 
 
 @dataclass(frozen=True, slots=True)

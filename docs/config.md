@@ -39,7 +39,17 @@ transcripts_days = 30                 # >= 1
 stt = "large-v3-turbo"                # whisper.cpp model
 agent = "sonnet"                      # agent backend model alias
 summary = "haiku"                     # rolling summary / minutes model alias
+
+[brain]
+backend = "claude"                    # which agent answers: "claude" or "codex"
 ```
+
+### Agent backend
+
+`brain.backend` swaps the agent without touching anything else (PRD C5):
+
+- `claude` (default): Claude over the Messages API, with read-only tools on the meeting folder ([ADR 0009](adr/0009-claude-backend-and-cache-ttl.md)).
+- `codex`: the [Codex CLI](https://github.com/openai/codex) (`codex exec`), which must be on `PATH` (tested against `rust-v0.159.1`). It authenticates with the OpenAI key from the keychain, or with an existing `codex login`. Each answer runs under a Codex permission profile that can read only the meeting folder (plus the OS files a shell needs), write nothing and reach no network. Your `~/.codex/config.toml` is ignored for these runs. See [ADR 0018](adr/0018-codex-backend.md).
 
 ## Profiles
 
