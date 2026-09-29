@@ -75,6 +75,10 @@ def _reject_secrets(path: Path, table: dict[str, Any], prefix: str) -> None:
             )
         if isinstance(value, dict):
             _reject_secrets(path, value, f"{dotted}.")
+        elif isinstance(value, list):  # arrays of tables: [[x]]
+            for i, item in enumerate(value):
+                if isinstance(item, dict):
+                    _reject_secrets(path, item, f"{dotted}[{i}].")
 
 
 class _Table:

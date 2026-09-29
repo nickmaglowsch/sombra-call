@@ -260,3 +260,12 @@ def test_meeting_config_requires_name_and_started_at(tmp_path: Path) -> None:
     _write(path, 'name = "x"\nstarted_at = "ontem"\n')
     with pytest.raises(ConfigError, match="started_at: expected a TOML datetime"):
         load_meeting_config(path)
+
+
+def test_secret_in_array_of_tables_points_to_sombra_auth(tmp_path: Path) -> None:
+    path = _write(
+        tmp_path / "config.toml", '[[providers]]\nname = "a"\n\n[[providers]]\napi_key = "x"\n'
+    )
+    with pytest.raises(ConfigError, match="sombra auth") as exc:
+        load_user_config(path)
+    assert exc.value.key == "providers[1].api_key"

@@ -261,3 +261,95 @@ def test_naive_meeting_writes_aware_times_as_local(meeting: Path) -> None:
     with MeetingStore(meeting, started_at=naive_start) as store:
         store.append_entry(SpeechLine(ts=aware, channel=Channel.ME, text="oi"))
         assert [e.ts for e in store.entries_since(naive_start)] == [naive_start]
+
+
+def test_entries_since_first_line_after_midnight(tmp_path: Path) -> None:
+    """Regression: a meeting starting 23:58 whose first line is 00:01 the next day."""
+    start = datetime(2026, 9, 29, 23, 58, tzinfo=TZ)
+    meeting = create_meeting(tmp_path, "late", started_at=start)
+    first = datetime(2026, 9, 30, 0, 1, tzinfo=TZ)
+    with MeetingStore(meeting) as store:
+        store.append_entry(SpeechLine(ts=first, channel=Channel.ME, text="oi"))
+        store.append_entry(
+            SpeechLine(ts=first + timedelta(minutes=1), channel=Channel.OTHERS, text="tudo bem?")
+        )
+        got = store.entries_since(datetime(2026, 9, 30, 0, 0, tzinfo=TZ))
+    assert [e.ts for e in got] == [first, first + timedelta(minutes=1)]
+
+
+class _ShortWriter:
+    """Wraps a raw file and writes at most 3 bytes per call, like a short write."""
+
+    def __init__(self, f: object) -> None:
+        self._f = f
+        self.name = "short"
+
+    def write(self, data: memoryview) -> int:
+        return self._f.write(data[:3])  # type: ignore[attr-defined,no-any-return]
+
+    def fileno(self) -> int:
+        return self._f.fileno()  # type: ignore[attr-defined,no-any-return]
+
+    def close(self) -> None:
+        self._f.close()  # type: ignore[attr-defined]
+
+
+def test_short_writes_are_completed(store: MeetingStore, meeting: Path) -> None:
+    store._transcript = _ShortWriter(store._transcript)  # type: ignore[assignment]
+    store.append_entry(_speech(1))
+    text = (meeting / "transcript.md").read_text(encoding="utf-8")
+    assert text == _speech(1).to_line() + "\n"
+
+
+def test_zero_byte_write_raises(store: MeetingStore) -> None:
+    class _Stuck:
+        name = "stuck"
+
+        def write(self, data: memoryview) -> int:
+            return 0
+
+    real = store._log
+    store._log = _Stuck()  # type: ignore[assignment]
+    try:
+        with pytest.raises(OSError, match="could not write"):
+            store.log(ActionLogged(suggestion_id="s", ts=START, kind=ActionKind.APPROVE))
+    finally:
+        store._log = real
+
+
+def test_fsync_failure_is_retried_and_thread_survives(
+    meeting: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    calls = 0
+    recovered = threading.Event()
+    real_fsync = os.fsync
+
+    def flaky(fd: int) -> None:
+        nonlocal calls
+        calls += 1
+        if calls == 1:
+            raise OSError(5, "EIO")
+        real_fsync(fd)
+        recovered.set()
+
+    monkeypatch.setattr(os, "fsync", flaky)
+    with MeetingStore(meeting, fsync_interval=0.01) as store:
+        store.append_entry(_speech(1))
+        assert recovered.wait(timeout=5)  # same file retried after the failure
+        assert store._syncer.is_alive()
+
+
+def test_explicit_sync_raises_and_keeps_file_dirty(
+    store: MeetingStore, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    store._stop.set()
+    store._syncer.join()
+    store.append_entry(_speech(1))
+
+    def boom(fd: int) -> None:
+        raise OSError(5, "EIO")
+
+    monkeypatch.setattr(os, "fsync", boom)
+    with pytest.raises(OSError):
+        store.sync()
+    assert store._transcript in store._dirty

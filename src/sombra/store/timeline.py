@@ -10,6 +10,7 @@ background thread ``fsync``s dirty files every ``fsync_interval`` seconds (defau
 
 from __future__ import annotations
 
+import logging
 import os
 import threading
 from dataclasses import replace
@@ -27,6 +28,8 @@ from sombra.contracts import (
     to_json_line,
 )
 from sombra.store.meeting import FRAME_INDEX_FILE, LOG_FILE, TRANSCRIPT_FILE, read_started_at
+
+_log = logging.getLogger(__name__)
 
 # A timestamp this much earlier than the previous line means the meeting crossed midnight.
 _ROLLOVER = timedelta(hours=12)
@@ -106,7 +109,7 @@ class MeetingStore:
         since = _align_tz(since, self._day)
         entries: list[TimelineEntry] = []
         day = self._day
-        prev: datetime | None = None
+        prev = self._day  # seeded with the start, so a first line after midnight rolls over too
         for raw in data.split(b"\n"):
             if not raw.strip():
                 continue
@@ -114,7 +117,7 @@ class MeetingStore:
                 entry = parse_line(raw.decode("utf-8", errors="replace"), day=day)
             except ValueError:
                 continue
-            if prev is not None and prev - entry.ts > _ROLLOVER:
+            if prev - entry.ts > _ROLLOVER:
                 day += timedelta(days=1)
                 entry = parse_line(raw.decode("utf-8", errors="replace"), day=day)
             prev = entry.ts
@@ -135,8 +138,19 @@ class MeetingStore:
                 return
             dirty = list(self._dirty)
             self._dirty.clear()
+        failed: list[BinaryIO] = []
+        error: Exception | None = None
         for f in dirty:
-            os.fsync(f.fileno())
+            try:
+                os.fsync(f.fileno())
+            except (OSError, ValueError) as e:  # EIO, or closed by a concurrent close()
+                failed.append(f)
+                error = e
+        if error is not None:
+            with self._lock:
+                if not self._closed:
+                    self._dirty.update(failed)  # retry next round
+            raise error
 
     def close(self) -> None:
         """Sync and close. Safe to call twice."""
@@ -168,12 +182,21 @@ class MeetingStore:
     def _write(self, f: BinaryIO, line: str) -> None:
         if self._closed:
             raise RuntimeError("MeetingStore is closed")
-        f.write(line.encode("utf-8") + b"\n")  # unbuffered: one O_APPEND write per line
+        data = memoryview(line.encode("utf-8") + b"\n")
+        while data:  # unbuffered: normally one O_APPEND write per line; loop on a short write
+            n = f.write(data)
+            if not n:
+                raise OSError(f"could not write to {getattr(f, 'name', f)!r}")
+            data = data[n:]
         self._dirty.add(f)
 
     def _sync_loop(self) -> None:
         while not self._stop.wait(self._interval):
-            self.sync()
+            try:
+                self.sync()
+            except (OSError, ValueError):
+                # Recording must survive a disk hiccup; keep retrying every interval.
+                _log.exception("fsync failed for %s; will retry", self._dir)
 
 
 def _open_append(path: Path) -> BinaryIO:
