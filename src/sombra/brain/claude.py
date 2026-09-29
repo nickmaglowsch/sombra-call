@@ -1,7 +1,7 @@
 """Claude backend: answers a trigger with a warm cached prefix and an ephemeral tail.
 
 Implements :class:`sombra.contracts.Brain` with our own tool loop on the Messages
-API (see ``docs/adr/0002-claude-backend-messages-api.md``). PRD C2, C6, C7 and the
+API (see ``docs/adr/0009-claude-backend-and-cache-ttl.md``). PRD C2, C6, C7 and the
 C5 backend interface.
 
 Every answer is one short, stateless conversation built from scratch:
@@ -157,7 +157,7 @@ class ClaudeSettings:
     effort: str | None = "low"  # latency first; None = model default
     timeout_s: float = 12.0  # whole answer, tool rounds included
     max_tool_rounds: int = 4
-    cache_ttl: Literal["5m", "1h"] = "1h"  # ADR 0002
+    cache_ttl: Literal["5m", "1h"] = "1h"  # ADR 0009
     warm_on_start: bool = True
 
 
