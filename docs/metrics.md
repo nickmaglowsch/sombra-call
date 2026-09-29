@@ -16,7 +16,7 @@ From Python: `sombra.metrics.analyze(meeting_dir, prices) -> MeetingReport`, `ag
 
 ## Metrics
 
-Each row shows target, value and `pass` / `fail` / `n/a` (`n/a`: no target, or no data to compute it).
+Each row shows target, value and `pass` / `fail` / `n/a` (`n/a`: no target, or no data to compute it). The targets are the README's MVP success table, except `frames attached per trigger (max) ≤ 3`, which comes from the architecture's "1 to 3 frames per call" limit and is a sanity check, not an MVP-gate row.
 
 | Metric | Target | How it is computed |
 | --- | --- | --- |
@@ -32,7 +32,7 @@ Each row shows target, value and `pass` / `fail` / `n/a` (`n/a`: no target, or n
 Definitions:
 
 - **Verdict.** A suggestion's verdict is the strongest of its `action` events: `not_for_me` > `edit` > `approve` > `discard` (so an edit followed by an approve counts as edited). Suggestions with no action are *undecided* and count in no ratio.
-- **Duration** (the "per hour" denominator) runs from the first to the last timestamp in the log, the frame index and the transcript. Transcript times are `HH:MM:SS`; their date and time zone come from `started_at` in `meeting.toml`, else from the earliest logged timestamp. Naive timestamps are read as local time.
+- **Duration** (the "per hour" denominator) runs from the first to the last timestamp in the log, the frame index and the transcript. Transcript times are local wall-clock `HH:MM:SS`; their date comes from `started_at` in `meeting.toml` (else the earliest logged timestamp) converted to the machine's local time zone, so a UTC log does not shift them. Run the report in the time zone the meeting was recorded in. When the transcript clock jumps back by more than 12 h, the meeting crossed midnight and later lines move to the next day. Naive log timestamps are read as local time.
 - **Aggregate.** Across meetings the raw counts are summed (latencies pooled, durations added) and every metric recomputed; ratios are never averaged. The cost is unknown if it is unknown for any meeting.
 - **L3 readiness.** `L3 readiness: <n>/50 L2 answers, <rate>% approved unedited (needs ≥ 90%)`, where *answers* are suggestions with verdict `approve`, `edit` or `discard` and the rate is the approved share. The log does not record the autonomy level, so run the report on L2 meetings when judging the L3 gate.
 

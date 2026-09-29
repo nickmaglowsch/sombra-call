@@ -1,6 +1,9 @@
 """`sombra report`: text table, --json, --markdown, --prices, --missed."""
 
 import json
+import os
+import time
+from collections.abc import Iterator
 from pathlib import Path
 
 import pytest
@@ -10,6 +13,22 @@ from sombra.metrics import Metric
 from sombra.metrics.render import format_target, format_value
 
 FIXTURES = Path(__file__).parent / "fixtures"
+
+
+@pytest.fixture(autouse=True)
+def _local_tz_brt() -> Iterator[None]:
+    """Transcript times are local wall-clock; the fixtures were written at UTC-3."""
+    old = os.environ.get("TZ")
+    os.environ["TZ"] = "<-03>3"
+    time.tzset()
+    yield
+    if old is None:
+        del os.environ["TZ"]
+    else:
+        os.environ["TZ"] = old
+    time.tzset()
+
+
 PRICES = """
 [models."claude-x"]
 input = 3.0

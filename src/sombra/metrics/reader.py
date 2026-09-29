@@ -10,8 +10,8 @@ from __future__ import annotations
 import json
 import tomllib
 from collections.abc import Iterable
-from dataclasses import dataclass, fields
-from datetime import datetime
+from dataclasses import dataclass, fields, replace
+from datetime import datetime, timedelta
 from pathlib import Path
 from typing import Any
 
@@ -40,6 +40,7 @@ _EVENT_TYPES: dict[str, type[Any]] = {
 }
 _DATETIME_FIELDS = {"ts", "detected_at"}
 _INT_FIELDS = {"latency_ms", "epoch", "width", "height"}
+_MIDNIGHT_JUMP = timedelta(hours=12)
 
 
 class _UnknownEvent(Exception):
@@ -100,7 +101,11 @@ def read_frames(meeting_dir: Path) -> tuple[list[FrameRecord], int]:
 
 
 def read_transcript(meeting_dir: Path, day: datetime) -> list[TimelineEntry]:
-    """Timeline entries; the header block and any non-timeline line are skipped."""
+    """Timeline entries; the header block and any non-timeline line are skipped.
+
+    Lines only carry ``HH:MM:SS``: when the clock jumps back by more than 12 h the
+    meeting crossed midnight, so that line and the ones after it move to the next day.
+    """
     path = meeting_dir / TRANSCRIPT
     if not path.is_file():
         return []
@@ -108,20 +113,28 @@ def read_transcript(meeting_dir: Path, day: datetime) -> list[TimelineEntry]:
     with path.open(encoding="utf-8") as f:
         for line in f:
             try:
-                entries.append(parse_line(line, day=day))
+                entry = parse_line(line, day=day)
             except ValueError:
                 continue
+            if entries and entry.ts < entries[-1].ts - _MIDNIGHT_JUMP:
+                day += timedelta(days=1)
+                entry = replace(entry, ts=entry.ts + timedelta(days=1))
+            entries.append(entry)
     return entries
 
 
 def meeting_day(meeting_dir: Path, known: Iterable[datetime]) -> datetime:
-    """Date + tz for the transcript's ``HH:MM:SS``: ``started_at`` in meeting.toml, else the
-    earliest logged timestamp, else now."""
+    """Local date + tz for the transcript's ``HH:MM:SS``: ``started_at`` in meeting.toml,
+    else the earliest logged timestamp, else now.
+
+    Transcript times are local wall-clock, so the anchor is converted to local time: a
+    log written in UTC must not shift every transcript line by the UTC offset.
+    """
     started = _started_at(meeting_dir / MEETING_TOML)
     if started is not None:
-        return aware(started)
+        return aware(started).astimezone()
     known = [aware(t) for t in known]
-    return min(known) if known else datetime.now().astimezone()
+    return (min(known) if known else datetime.now()).astimezone()
 
 
 def _started_at(path: Path) -> datetime | None:

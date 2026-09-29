@@ -1,15 +1,46 @@
 """Reading the meeting folder (forward compatibility), the price table and missed triggers."""
 
-from datetime import UTC, datetime, timedelta, timezone
+import os
+import time
+from collections.abc import Iterator
+from datetime import UTC, date, datetime, timedelta, timezone
 from pathlib import Path
 
 import pytest
 
 from sombra.contracts import ActionKind, ActionLogged, SuggestionLogged, TriggerLogged, Usage
-from sombra.metrics import ModelPrice, load_price_table, missed_triggers, parse_price_table
-from sombra.metrics.reader import meeting_day, parse_event, read_frames, read_log
+from sombra.metrics import (
+    ModelPrice,
+    analyze,
+    load_price_table,
+    missed_triggers,
+    parse_price_table,
+)
+from sombra.metrics.reader import (
+    meeting_day,
+    parse_event,
+    read_frames,
+    read_log,
+    read_transcript,
+)
 
 FIXTURES = Path(__file__).parent / "fixtures"
+
+
+@pytest.fixture(autouse=True)
+def _local_tz_brt() -> Iterator[None]:
+    """Transcript times are local wall-clock; the fixtures were written at UTC-3."""
+    old = os.environ.get("TZ")
+    os.environ["TZ"] = "<-03>3"
+    time.tzset()
+    yield
+    if old is None:
+        del os.environ["TZ"]
+    else:
+        os.environ["TZ"] = old
+    time.tzset()
+
+
 BRT = timezone(timedelta(hours=-3))
 
 # --- reader --------------------------------------------------------------------------
@@ -170,3 +201,55 @@ def test_missed_triggers_without_aliases_or_transcript() -> None:
     assert missed_triggers(FIXTURES / "empty") == []
     assert missed_triggers(FIXTURES / "empty", [" "]) == []
     assert missed_triggers(FIXTURES / "errors_only") == []  # alias known, no transcript
+
+
+# --- time zones: transcript is local wall-clock, the log may be UTC ---------------------
+
+
+def _utc_meeting(root: Path, started_at: str | None) -> Path:
+    """A 30-min meeting at 14:30-15:00 local (UTC-3), logged in UTC."""
+    root.mkdir(exist_ok=True)
+    if started_at is not None:
+        (root / "meeting.toml").write_text(f'started_at = "{started_at}"\n', encoding="utf-8")
+    (root / "transcript.md").write_text(
+        "[14:30:00] EU: bom dia\n"
+        "[14:32:07] OUTROS: Nick, o que você acha?\n"
+        "[14:40:00] OUTROS: o Nick falou isso ontem\n"
+        "[15:00:00] EU: até amanhã\n",
+        encoding="utf-8",
+    )
+    at = "2026-09-29T17:32:09+00:00"
+    (root / "log.jsonl").write_text(
+        f'{{"type":"trigger","trigger_id":"t1","ts":"{at}","detected_at":"{at}","question":"?",'
+        '"matched_alias":"Nick","score":0.9,"needs_screen":false}\n',
+        encoding="utf-8",
+    )
+    return root
+
+
+@pytest.mark.parametrize("started_at", [None, "2026-09-29T17:30:00+00:00"])
+def test_utc_log_with_local_transcript(tmp_path: Path, started_at: str | None) -> None:
+    meeting = _utc_meeting(tmp_path / "m", started_at)
+    assert analyze(meeting).stats.duration_s == 1800
+    missed = missed_triggers(meeting, ["Nick"])
+    assert [m.line for m in missed] == ["[14:40:00] OUTROS: o Nick falou isso ontem"]
+
+
+def test_utc_date_differs_from_local_date(tmp_path: Path) -> None:
+    # 01:00 UTC on the 30th is 22:00 local on the 29th: the transcript is on the 29th.
+    day = meeting_day(tmp_path, [datetime(2026, 9, 30, 1, 0, tzinfo=UTC)])
+    assert (day.date(), day.utcoffset()) == (date(2026, 9, 29), timedelta(hours=-3))
+
+
+def test_transcript_crossing_midnight(tmp_path: Path) -> None:
+    (tmp_path / "transcript.md").write_text(
+        "[23:50:00] EU: começando tarde\n"
+        "[23:59:59] OUTROS: quase meia-noite\n"
+        "[23:59:58] EU: linhas fora de ordem por segundos não viram o dia\n"
+        "[00:10:00] OUTROS: Nick, e agora?\n"
+        "[00:20:00] EU: tchau\n",
+        encoding="utf-8",
+    )
+    entries = read_transcript(tmp_path, datetime(2026, 9, 29, 23, 50, tzinfo=BRT))
+    assert [e.ts.day for e in entries] == [29, 29, 29, 30, 30]
+    assert analyze(tmp_path).stats.duration_s == 30 * 60
