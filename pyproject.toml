@@ -8,6 +8,9 @@ license = { text = "Proprietary" }
 dependencies = [
     "anthropic>=1.9.0",
     "keyring>=25.7.0",
+    "numpy>=2.5.3",
+    "onnxruntime>=1.30.0",
+    "pywhispercpp>=1.5.1",
 ]
 
 [project.scripts]
@@ -63,11 +66,12 @@ warn_unreachable = true
 
 [[tool.mypy.overrides]]
 # Native/platform bindings rarely ship type stubs.
-module = ["pyobjc.*", "objc.*", "Quartz.*", "ScreenCaptureKit.*", "AVFoundation.*", "sounddevice.*", "whisper_cpp.*", "pywhispercpp.*", "silero_vad.*", "keyring.*", "gi.*", "dbus.*"]
+module = ["pyobjc.*", "objc.*", "Quartz.*", "ScreenCaptureKit.*", "AVFoundation.*", "sounddevice.*", "whisper_cpp.*", "pywhispercpp.*", "onnxruntime.*", "silero_vad.*", "keyring.*", "gi.*", "dbus.*"]
 ignore_missing_imports = true
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
+pythonpath = ["tests"]  # shared fakes: `from fakes import FakeBrain`
 asyncio_mode = "auto"
 addopts = "-ra --strict-markers -m 'not hardware and not network'"
 markers = [
