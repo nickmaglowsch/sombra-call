@@ -3,10 +3,10 @@ from itertools import pairwise
 
 import numpy as np
 import pytest
-from audio_fakes import FakeSounddevice, FakeTap
+from audio_fakes import FakeInputOutputPair, FakeSounddevice, FakeTap
 
 from sombra.audio.devices import TAP_ID
-from sombra.audio.macos import MacAudioSource
+from sombra.audio.macos import MacAudioSource, _default_in
 from sombra.contracts import SAMPLE_RATE, AudioSource, Channel
 
 
@@ -177,6 +177,46 @@ def test_default_device_shapes(dev: object) -> None:
     src, _ = _source(sd, macos_release="14.0")
     src.start()
     assert sd.streams[0].kwargs["device"] == (3 if dev == 3 else 0)
+
+
+def test_default_device_is_an_input_output_pair_not_a_tuple() -> None:
+    # Regression (#53): real sounddevice returns ``_InputOutputPair``, which only indexes.
+    sd = FakeSounddevice()
+    sd.default.device = [3, 1]
+    assert not isinstance(sd.default.device, list | tuple)
+    src, _ = _source(sd, macos_release="14.0")
+    src.start()
+    assert sd.streams[0].kwargs["device"] == 3
+
+
+class _IndexOnly:
+    """Pair-like with ``__getitem__`` only, the bare shape of ``_InputOutputPair``."""
+
+    def __init__(self, *values: object) -> None:
+        self._values = values
+
+    def __getitem__(self, i: int) -> object:
+        return self._values[i]
+
+
+@pytest.mark.parametrize(
+    ("dev", "expected"),
+    [
+        (_IndexOnly(3, 1), 3),
+        (_IndexOnly(-1, -1), -1),  # PortAudio: no default input
+        (FakeInputOutputPair([None, None], (2, 1)), 2),  # unset -> PortAudio default
+        (5, 5),
+        (None, -1),
+        ((None, 1), -1),
+        ("USB Mic", -1),  # a name, not an index: leave it to the fallback mic
+    ],
+)
+def test_default_in_accepts_every_device_shape(dev: object, expected: int) -> None:
+    class Sd:
+        class default:  # mirrors sounddevice.default
+            device = dev
+
+    assert _default_in(Sd) == expected
 
 
 def test_tap_module_imports_everywhere() -> None:
