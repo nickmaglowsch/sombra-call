@@ -3,8 +3,9 @@
 Owns ``summary.md`` in the meeting folder (layout in ``summary_file``), the
 ``TextModel`` port this package calls (``model``) with its Anthropic API and
 subscription-CLI adapters (``cli_models``), ``EpochSummarizer`` (``epochs``),
-``write_minutes`` (``minutes``) and the ``sombra minutes <meeting>`` command.
-Deciding *when* to run an epoch or the minutes is the orchestrator's job.
+and ``write_minutes`` (``minutes``). Deciding *when* to run an epoch or the minutes, which
+model to use, and the ``sombra minutes`` command are the orchestrator's job (it reads the
+user config, which this package must not).
 """
 
 from sombra.summary.cli_models import ClaudeCliTextModel, CodexCliTextModel

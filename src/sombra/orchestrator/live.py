@@ -1,7 +1,8 @@
 """``sombra start``: a live meeting on macOS, from config to minutes (#17).
 
 Order, as in the issue: user config (+ profile) -> meeting folder -> consent gate (a
-refusal removes the folder it just made) -> API key from the keychain -> capture
+refusal removes the folder it just made) -> the agent provider from ``[brain]`` /
+``[summary]`` (a keychain key only for the API-key backends, #47) -> capture
 sources, transcriber, detector, brain, overlay, summary -> :class:`Session`. Ctrl+C
 (or closing the overlay window) stops the session: queues drain, minutes are written,
 and the ``sombra report`` table is printed.
@@ -31,7 +32,6 @@ from sombra.contracts import ApprovalUI, AudioSource, AutonomyLevel, Brain, Scre
 from sombra.orchestrator.session import local_now
 from sombra.orchestrator.settings import SessionSettings
 from sombra.orchestrator.wiring import (
-    ANTHROPIC,
     Assembly,
     NoBrain,
     SilentUI,
@@ -40,10 +40,10 @@ from sombra.orchestrator.wiring import (
     build_session,
     build_transcriber,
     epoch_interval_s,
-    resolve_claude_model,
+    key_provider,
 )
 from sombra.privacy import BlockedApps, ControlServer, PauseController
-from sombra.summary import AnthropicTextModel, TextModel
+from sombra.summary import TextModel
 
 log = logging.getLogger(__name__)
 
@@ -58,8 +58,8 @@ class LivePlan:
     level: AutonomyLevel
     allowed_topics: Sequence[str] = ()
     window: str | None = None  # window-only capture: a title substring (S4)
-    api_key: Callable[[], str] | None = None  # Anthropic: summaries, minutes, Claude
-    agent_key: Callable[[], str] | None = None  # the key of `brain.backend`
+    summary: TextModel | None = None  # rolling summaries and minutes; None: neither
+    agent_key: Callable[[], str] | None = None  # `wiring.agent_key`: None on a CLI login
     blocked: BlockedApps = field(default_factory=BlockedApps)
 
 
@@ -117,17 +117,17 @@ def build_live_sources(plan: LivePlan) -> tuple[AudioSource, ScreenSource]:  # p
 
 
 def summary_model(plan: LivePlan) -> TextModel | None:
-    if plan.api_key is None:
-        return None
-    return AnthropicTextModel(plan.api_key, model=resolve_claude_model(plan.config.models.summary))
+    return plan.summary
 
 
 def build_brain(plan: LivePlan) -> Brain:
     if plan.level is AutonomyLevel.L0:
         return NoBrain()
-    backend = plan.config.brain.backend
-    if backend == "claude" and plan.agent_key is None:
-        raise ValueError(f"{plan.level} needs an API key: run `sombra auth set {ANTHROPIC}`")
+    brain = plan.config.brain
+    backend = brain.backend
+    if brain.uses_api_key and plan.agent_key is None:
+        provider = key_provider(backend)
+        raise ValueError(f"{plan.level} needs an API key: run `sombra auth set {provider}`")
     user = plan.config.user
     return build_agent_brain(
         backend,

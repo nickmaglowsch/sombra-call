@@ -18,7 +18,7 @@ Each module is one package under `src/sombra/`, owned by one issue at a time.
 | `summary` | rolling summary epochs, end-of-meeting minutes and action items (C4, M3) | — |
 | `privacy` | consent gate, pause shortcut, blocked apps, retention, keychain secrets | — |
 | `metrics` | log analysis, success metrics, offline replay harness | — |
-| `config` | user config file and meeting config schema | — |
+| `config` | user config file and meeting config schema; `sombra setup` (agent provider) and `sombra doctor` | — |
 | `orchestrator` | wiring, event loop, autonomy levels, failure handling, latency timestamps | — |
 
 ## Boundary rules (enforced by `tests/test_architecture.py`)

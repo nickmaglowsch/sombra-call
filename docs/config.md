@@ -41,24 +41,37 @@ agent = "sonnet"                      # agent backend model alias
 summary = "haiku"                     # rolling summary / minutes model alias
 
 [brain]
-backend = "claude"                    # which agent answers: "claude" or "codex"
+backend = "claude-api"                # which agent answers: "claude-code", "claude-api" or "codex"
+# auth = "subscription"               # codex only: "subscription" (`codex login`) or "api-key"
+
+[summary]
+backend = "follow"                    # summaries and minutes: "follow" [brain], a backend, or "none"
 ```
+
+`sombra setup` writes `[brain]` and `[summary]` for you and keeps every other key and comment ([providers.md](providers.md)).
 
 ### Agent backend
 
-`brain.backend` swaps the agent without touching anything else (PRD C5):
+`brain.backend` swaps the agent without touching anything else (PRD C5). `sombra setup` picks it, checks the CLI or key it needs, and asks one test question; [providers.md](providers.md) compares billing, limits and confinement.
 
-- `claude` (default): Claude over the Messages API, with read-only tools on the meeting folder ([ADR 0009](adr/0009-claude-backend-and-cache-ttl.md)).
-- `codex`: the [Codex CLI](https://github.com/openai/codex) (`codex exec`), which must be on `PATH` (tested against `rust-v0.159.1`). It authenticates with the OpenAI key from the keychain, or with an existing `codex login`. Each answer runs under a Codex permission profile that can read only the meeting folder (plus the OS files a shell needs), write nothing and reach no network. Your `~/.codex/config.toml` is ignored for these runs. See [ADR 0018](adr/0018-codex-backend.md).
+- `claude-code`: your logged-in [Claude Code](https://code.claude.com/docs) CLI, paid by your Claude Pro/Max subscription (see below and [ADR 0046](adr/0046-claude-code-backend.md)).
+- `claude-api` (default; `claude` is accepted as its old name): Claude over the Messages API with the Anthropic key from the keychain (`sombra auth set anthropic`), with read-only tools on the meeting folder ([ADR 0009](adr/0009-claude-backend-and-cache-ttl.md)).
+- `codex`: the [Codex CLI](https://github.com/openai/codex) (`codex exec`), which must be on `PATH` (0.159.1 or newer). `brain.auth` says who pays: `"subscription"` uses your `codex login` (a ChatGPT plan) and never passes a key; `"api-key"` passes the OpenAI key from the keychain (`sombra auth set openai`). Without `auth`, the stored key is used when there is one, else `codex login`. Each answer runs under a Codex permission profile that can read only the meeting folder (plus the OS files a shell needs), write nothing and reach no network. Your `~/.codex/config.toml` is ignored for these runs. See [ADR 0018](adr/0018-codex-backend.md) and the residual risk in [providers.md](providers.md#codex-residual-risk).
+
+`brain.auth` is only for `codex`; `claude-code` is always the subscription and `claude-api` always a key, and any other value is an error naming the file and key.
+
+`[summary] backend` picks who writes the rolling summaries and minutes: `follow` (default) uses the agent's backend; `claude-code`, `claude-api` or `codex` pick one; `none` writes neither. The CLI summary models use the CLI's own login and never an API key.
+
+`[models] agent` / `summary` are aliases per backend: `claude-api` maps `opus` / `sonnet` / `haiku` to API ids, `claude-code` passes them to the CLI, which resolves them for your plan, and `codex` ignores Claude names and uses its default (give a Codex model id to choose one). `"default"` lets every backend choose.
 
 #### Claude Code CLI (Claude Pro/Max subscription)
 
-`sombra.brain.claude_code.ClaudeCodeBrain` answers through your own installed and logged-in [Claude Code](https://code.claude.com/docs) CLI, so your Claude Pro or Max subscription pays for it instead of an API key. `sombra.summary.ClaudeCliTextModel` (and `CodexCliTextModel` for a ChatGPT plan via `codex login`) do the same for rolling summaries and minutes. The config keys that select them come with `sombra setup` (#47); this section describes what they do.
+`backend = "claude-code"` answers through your own installed and logged-in [Claude Code](https://code.claude.com/docs) CLI (`sombra.brain.claude_code.ClaudeCodeBrain`), so your Claude Pro or Max subscription pays for it instead of an API key. `[summary] backend = "claude-code"` (or `"codex"`, for a ChatGPT plan via `codex login`) does the same for rolling summaries and minutes (`sombra.summary.ClaudeCliTextModel` / `CodexCliTextModel`).
 
 What you need:
 
 - `claude` 2.1.285 or newer on `PATH` (`claude --version`; update with `claude update`). An older or unrecognised CLI is refused, because the confinement below depends on its flags.
-- A subscription login: run `claude` once and use `/login`. If Sombra reports "Claude Code is not logged in", do that again.
+- A subscription login: `claude auth login` (or run `claude` once and use `/login`); `sombra setup` offers to start it. `claude auth status` shows the login. If Sombra reports "Claude Code is not logged in", log in again.
 - No API key. Sombra never passes `ANTHROPIC_API_KEY`, `ANTHROPIC_AUTH_TOKEN` or `ANTHROPIC_BASE_URL` to the CLI, even if they are set in your shell, because a key would move billing from the subscription to the API. Sombra never reads, copies or stores the CLI's login. `CLAUDE_CODE_OAUTH_TOKEN` (from `claude setup-token`) is not passed through either, so log in with `/login` rather than relying on that variable.
 
 What each answer does:
@@ -89,6 +102,7 @@ sombra new "x" --config ./other-config.toml  # use another user config file
 sombra profiles list                         # one profile per line: name<TAB>description
 sombra config init                           # write config.toml with every default, if there is none
 sombra config path                           # print the user config path
+sombra setup                                 # choose the agent provider (providers.md)
 ```
 
 `sombra new` creates the folder described in [ARCHITECTURE.md](ARCHITECTURE.md#meeting-folder): `meeting.toml`, `context/`, an empty `transcript.md`, `frames/index.jsonl` and `log.jsonl`. If the folder name is already taken, it adds `-2`, `-3`, and so on.

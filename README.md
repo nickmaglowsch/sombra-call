@@ -71,15 +71,28 @@ docs/
 
 Read [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md) before writing code.
 
-## Install
+## Quickstart
 
 On macOS 14+ (Apple Silicon) or Ubuntu 22.04/24.04:
 
 ```sh
+# 1. Install: uv (if missing), Sombra, the local models, a default config, then `sombra doctor`
 curl -fsSL https://github.com/nickmaglowsch/sombra-call/releases/latest/download/install.sh | sh
+
+# 2. Choose the agent: Claude or Codex, on your subscription (Claude Pro/Max, ChatGPT) or an API key
+sombra setup
+
+# 3. Tell Sombra your name (the one people call you in meetings)
+$EDITOR ~/.config/sombra/config.toml     # [user] name = "Nick"
+
+# 4. First meeting (macOS): record, transcribe, answer when you're called; Ctrl+C ends it
+sombra start "Daily"
+sombra ask latest "O que combinamos sobre o prazo?"
 ```
 
-It installs uv (if missing) and Sombra on a uv-managed Python 3.12, downloads the local models, writes `~/.config/sombra/config.toml` and runs `sombra doctor`, which lists what is still needed (permissions, API keys). Re-run it to upgrade; `--uninstall` removes it and never touches `~/Sombra/meetings`. On Ubuntu, live capture is not built yet. Options and details: [`docs/install.md`](docs/install.md).
+`sombra setup` finds the `claude` / `codex` CLIs and offers to install one, checks its login with the CLI's own status command and offers the CLI's own login flow (Sombra never sees the token), or stores an API key in the OS keychain. It then writes the choice to `config.toml` without touching your other settings and asks one test question. How each option is billed, what happens at a usage limit, and the Codex residual risk are in [`docs/providers.md`](docs/providers.md).
+
+Re-run the installer to upgrade; `--uninstall` removes it and never touches `~/Sombra/meetings`. On Ubuntu, live capture is not built yet, but `replay`, `ask`, `minutes` and `report` work. Options and details: [`docs/install.md`](docs/install.md); day-to-day use: [`docs/usage.md`](docs/usage.md).
 
 ## Development
 
@@ -92,10 +105,10 @@ make fmt     # auto-fix lint and formatting
 uv run sombra --version
 uv run sombra start "Daily"       # a live meeting (macOS); see docs/usage.md
 uv run sombra replay me.wav others.wav --fake-brain --auto-approve   # the pipeline on files
-uv run sombra minutes <meeting>   # (re)generate the minutes; see docs/summary.md
+uv run sombra minutes latest      # (re)generate the minutes; see docs/summary.md
 ```
 
-Configuration (user config, profiles, `sombra new`, `sombra profiles list`) is documented in [`docs/config.md`](docs/config.md).
+Configuration (user config, profiles, `sombra new`, `sombra profiles list`) is documented in [`docs/config.md`](docs/config.md); the agent providers in [`docs/providers.md`](docs/providers.md).
 
 After a meeting, `sombra ask latest "O que combinamos sobre o prazo?"` answers from the transcript with `[HH:MM:SS]` references; see [`docs/ask.md`](docs/ask.md).
 
