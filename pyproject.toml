@@ -8,6 +8,7 @@ license = { text = "Proprietary" }
 dependencies = [
     "aiohttp>=3.10",
     "anthropic>=1.9.0",
+    "keyring>=25.7.0",
     "numpy>=2.5.3",
     "onnxruntime>=1.30.0",
     "pillow>=12.3.0",
