@@ -114,12 +114,18 @@ thread (keep it quick; hand off with `loop.call_soon_threadsafe`). Fields:
 | Field | Meaning |
 | --- | --- |
 | `channel` | `EU` or `OUTROS` |
-| `kind` | `lost`, `retrying` (an attempt failed, next after the backoff) or `restored` |
+| `kind` | `lost`, `retrying` (an attempt failed, next after the backoff) or `restored` (see below for planned switches) |
 | `at` | wall-clock time, on the same clock as the chunks |
 | `reason` | why it was lost or why the attempt failed |
 | `device` | the device id in use after the restart |
 | `attempt` | restart attempt number, from 1 |
-| `gap_s` | on `restored`: seconds from loss to the first new audio |
+| `gap_s` | on `restored`: seconds from the last audio before the loss to the first new audio |
+
+Not every `lost` is a failure. A deliberate move to a better device is reported as
+`lost` too, with a `reason` the orchestrator can match: `switching to microphone ...`
+(the preferred mic came back), `default output changed ...` (tap path), or
+`reopened with EU` / `reopened with OUTROS` (the other channel, reopened because PortAudio
+had to re-enumerate). Show those as "switching" rather than "source lost".
 
 ## Checking it on your Mac
 

@@ -153,6 +153,8 @@ class MacAudioSource:
         self._devices: dict[Channel, InputDevice] = {}
         self._generation: dict[Channel, int] = {}
         self._closed_overflows = 0
+        # Last stamp handed out per channel by a closed stream: the next one continues after it.
+        self._stamp_floor: dict[Channel, int] = {}
         self._supervisor: ReconnectSupervisor | None = None
         self._watcher: DeviceWatcher | None = None
         self._output_name: str | None = None
@@ -213,8 +215,9 @@ class MacAudioSource:
 
     @property
     def overflows(self) -> int:
-        with self._lock:
-            return self._closed_overflows + sum(c.overflows for c in self._captures.values())
+        # No lock: the reconnect thread holds it through a PortAudio re-init, and this may
+        # be read from the event loop. tuple() snapshots the dict atomically under the GIL.
+        return self._closed_overflows + sum(c.overflows for c in tuple(self._captures.values()))
 
     # --- internals ---------------------------------------------------------------------
 
@@ -492,7 +495,12 @@ class MacAudioSource:
 
     def _open(self, sd: Any, dev: InputDevice, channel: Channel) -> None:
         cap = ChannelCapture(
-            channel, dev.sample_rate, self._clock, self._queue, chunk_ms=self.chunk_ms
+            channel,
+            dev.sample_rate,
+            self._clock,
+            self._queue,
+            chunk_ms=self.chunk_ms,
+            floor_ns=self._stamp_floor.get(channel),
         )
         channels = min(dev.channels, 2)
         generation = self._generation[channel] = self._generation.get(channel, 0) + 1
@@ -532,17 +540,21 @@ class MacAudioSource:
     def _close_channel(self, channel: Channel) -> None:
         self._generation[channel] = self._generation.get(channel, 0) + 1
         self._devices.pop(channel, None)
+        stream = self._streams.pop(channel, None)
+        if stream is not None:
+            try:
+                stream.stop()  # waits for a callback in flight
+                stream.close()
+            except Exception:  # a vanished device may fail to stop; keep going
+                log.exception("error closing audio stream on %s", channel.value)
         cap = self._captures.pop(channel, None)
         if cap is not None:
             self._closed_overflows += cap.overflows
-        stream = self._streams.pop(channel, None)
-        if stream is None:
-            return
-        try:
-            stream.stop()
-            stream.close()
-        except Exception:  # a vanished device may fail to stop; keep going
-            log.exception("error closing audio stream on %s", channel.value)
+            if cap.timer.last_stamp_ns is not None:
+                self._stamp_floor[channel] = cap.timer.last_stamp_ns
+        if self._supervisor is not None:
+            # The old stream is stopped: only audio from the next one may confirm a restart.
+            self._supervisor.forget_frames(channel)
 
 
 def _is_mic_name(name: str) -> bool:

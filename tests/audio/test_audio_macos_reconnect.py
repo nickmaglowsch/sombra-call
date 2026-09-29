@@ -8,6 +8,7 @@ import asyncio
 import threading
 import time
 from collections.abc import Callable, Iterator
+from itertools import pairwise
 from typing import Any
 
 import pytest
@@ -365,3 +366,23 @@ def test_fourcc() -> None:
     assert PROP_DEVICES == 0x64657623
     with pytest.raises(ValueError, match="4 characters"):
         fourcc("dev")
+
+
+async def test_chunk_stamps_stay_increasing_across_reconnects(rigs: list[Rig]) -> None:
+    r = _rig(rigs, mic="USB Mic", default_input="USB Mic")
+    for i in range(5):
+        r.sd.unplug("USB Mic")
+        r.watcher.changed()
+        wait(r.restored(ME, 2 * i + 1))
+        r.sd.plug("USB Mic", inputs=2, rate=44100.0)
+        r.watcher.changed()
+        wait(r.restored(ME, 2 * i + 2))
+        wait(r.restored(OTHERS, i + 1))  # system audio was reopened by the re-init
+    await r.src.close()
+    starts: dict[Channel, list[Any]] = {ME: [], OTHERS: []}
+    while (chunk := await r.src._queue.get()) is not None:
+        starts[chunk.channel].append(chunk.start)
+    for ch, seq in starts.items():
+        assert len(seq) > 20
+        backwards = [(b - a).total_seconds() for a, b in pairwise(seq) if b <= a]
+        assert backwards == [], f"{ch.value} went backwards: {backwards}"

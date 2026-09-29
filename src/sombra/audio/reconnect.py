@@ -144,6 +144,10 @@ class ReconnectSupervisor:
             self._poked = True
             self._cond.notify()
 
+    def forget_frames(self, channel: Channel) -> None:
+        """The backend closed ``channel``'s stream: its earlier frames confirm nothing."""
+        self._last_frame.pop(channel, None)
+
     def state(self, channel: Channel) -> str:
         return self._chans[channel].state
 
@@ -198,7 +202,8 @@ class ReconnectSupervisor:
             last = self._last_frame.get(channel)
             if c.state == "running":
                 if last is not None and now - last > self._stall_ns:
-                    self._mark_lost(channel, f"no audio for {(now - last) / NS:.1f} s", now)
+                    # The audio stopped at ``last``, not when we noticed: count the gap from there.
+                    self._mark_lost(channel, f"no audio for {(now - last) / NS:.1f} s", last)
             elif c.state == "confirming":
                 if last is not None and last >= c.restart_ns:
                     c.state = "running"

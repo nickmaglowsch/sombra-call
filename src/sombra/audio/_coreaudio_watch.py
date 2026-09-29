@@ -53,6 +53,9 @@ class _Address(ctypes.Structure):
     )
 
 
+#: Listener thunks are kept for the life of the process (one per watcher start).
+_THUNKS: list[Any] = []
+
 _ListenerProc = ctypes.CFUNCTYPE(
     ctypes.c_int32, ctypes.c_uint32, ctypes.c_uint32, ctypes.POINTER(_Address), ctypes.c_void_p
 )
@@ -65,10 +68,11 @@ class CoreAudioWatcher:  # pragma: no cover - needs macOS
         self._ca = ca
         self._cf = cf
         self._proc: Any = None
+        self._registered = False
 
     def start(self, on_change: Callable[[], None]) -> None:
         """Call ``on_change()`` (on a Core Audio thread) whenever devices change."""
-        if self._proc is not None:
+        if self._registered:
             return
 
         def listener(_obj: int, _n: int, _addrs: Any, _data: Any) -> int:
@@ -78,7 +82,9 @@ class CoreAudioWatcher:  # pragma: no cover - needs macOS
                 log.exception("audio device listener failed")
             return 0
 
-        self._proc = _ListenerProc(listener)  # keep a reference while registered
+        self._proc = _ListenerProc(listener)
+        _THUNKS.append(self._proc)  # never freed, see stop()
+        self._registered = True
         for sel in WATCHED:
             err = self._ca.AudioObjectAddPropertyListener(
                 SYSTEM_OBJECT,
@@ -90,16 +96,20 @@ class CoreAudioWatcher:  # pragma: no cover - needs macOS
                 log.warning("AudioObjectAddPropertyListener(%#x) failed: OSStatus %s", sel, err)
 
     def stop(self) -> None:
-        if self._proc is None:
+        if not self._registered:
             return
+        self._registered = False
         for sel in WATCHED:
-            self._ca.AudioObjectRemovePropertyListener(
+            err = self._ca.AudioObjectRemovePropertyListener(
                 SYSTEM_OBJECT,
                 ctypes.byref(_Address(sel, SCOPE_GLOBAL, ELEMENT_MAIN)),
                 self._proc,
                 None,
             )
-        self._proc = None
+            if err:
+                log.warning("AudioObjectRemovePropertyListener(%#x) failed: OSStatus %s", sel, err)
+        # The thunk stays in _THUNKS: removing a listener does not wait for a call already
+        # running on the HAL thread, and freeing the ctypes thunk under it would crash.
 
     def input_names(self) -> set[str]:
         """Names of the devices with input streams that exist right now."""

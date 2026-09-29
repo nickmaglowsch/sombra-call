@@ -83,13 +83,21 @@ async def test_reconnect_during_capture() -> None:
     t0 = time.monotonic()
     gen = src.stream()
 
+    def recovering() -> bool:
+        last = {e.channel: e.kind for e in events}
+        return any(kind != "restored" for kind in last.values())
+
     async def consume() -> None:
         async for chunk in gen:
             counts[chunk.channel] += 1
-            if time.monotonic() - t0 >= RECONNECT_SECONDS:
+            elapsed = time.monotonic() - t0
+            # Past the limit, give a channel still reconnecting a few seconds to come back.
+            if elapsed >= RECONNECT_SECONDS and (
+                not recovering() or elapsed >= RECONNECT_SECONDS + 5
+            ):
                 return
 
-    await asyncio.wait_for(consume(), RECONNECT_SECONDS + 10)
+    await asyncio.wait_for(consume(), RECONNECT_SECONDS + 15)
     await gen.aclose()
     for e in events:
         print(  # noqa: T201 - the report is the point

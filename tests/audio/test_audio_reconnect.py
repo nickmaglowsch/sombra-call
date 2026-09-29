@@ -119,6 +119,14 @@ def test_stall_watchdog_is_armed_by_the_first_frame() -> None:
     assert [(e.channel, e.kind) for e in events] == [(OTHERS, "lost")]
     assert events[0].reason.startswith("no audio for 0.6 s")
     assert backend.calls == [(OTHERS, 1)]
+    # The audio stopped at the last frame, 0.6 s before the watchdog noticed.
+    assert events[0].at == clock.to_wall(clock.t - int(0.6 * NS))
+    clock.advance(0.1)
+    sup.frame(OTHERS)
+    sup.frame(ME)
+    sup.step()
+    assert events[-1].kind == "restored"
+    assert events[-1].gap_s == pytest.approx(0.7)  # last frame -> first new frame
 
 
 def test_restart_without_audio_is_a_failed_attempt() -> None:
@@ -266,3 +274,20 @@ def test_worker_survives_a_crashing_step(caplog: pytest.LogCaptureFixture) -> No
     _wait(lambda: calls == 1)
     sup.stop()
     assert "reconnect step failed" in caplog.text
+
+
+def test_frames_from_the_closed_stream_do_not_confirm() -> None:
+    clock, backend = FakeClock(), FakeBackend()
+    sup, events = _sup(backend, clock)
+
+    def restart(channel: Channel, attempt: int) -> Mapping[Channel, str]:
+        sup.frame(channel)  # a late callback of the old stream, before it is stopped
+        sup.forget_frames(channel)  # the backend closed it
+        return backend.restart(channel, attempt)
+
+    sup._restart = restart
+    sup.report_lost(ME, "switching to microphone 'USB Mic'")
+    sup.step()
+    sup.step()
+    assert sup.state(ME) == "confirming"
+    assert [e.kind for e in events] == ["lost"]
