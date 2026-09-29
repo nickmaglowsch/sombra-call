@@ -6,7 +6,7 @@ initial prompt). Implements ``sombra.contracts.Transcriber`` as ``WhisperTranscr
 
 Native bindings (onnxruntime, pywhispercpp) are imported lazily, so this package imports
 on any OS without models present. Model files live in ``~/.cache/sombra/models`` and are
-fetched by ``scripts/download_models.py``.
+fetched by ``sombra models download``.
 """
 
 from sombra.transcription.filters import HallucinationFilter, build_initial_prompt
