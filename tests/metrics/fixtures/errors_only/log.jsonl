@@ -1,0 +1,4 @@
+{"type": "trigger", "trigger_id": "t1", "ts": "2026-09-30T10:00:00+00:00", "detected_at": "2026-09-30T10:00:00+00:00", "question": "?", "matched_alias": "Nick", "score": 0.8, "needs_screen": true}
+{"type": "agent_error", "trigger_id": "t1", "ts": "2026-09-30T10:00:10+00:00", "error": "API 529 overloaded"}
+{"type": "trigger", "trigger_id": "t2", "ts": "2026-09-30T10:20:00+00:00", "detected_at": "2026-09-30T10:20:00+00:00", "question": "?", "matched_alias": "Nick", "score": 0.8, "needs_screen": true}
+{"type": "agent_error", "trigger_id": "t2", "ts": "2026-09-30T10:20:10+00:00", "error": "API 529 overloaded"}
