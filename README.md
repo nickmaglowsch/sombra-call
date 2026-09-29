@@ -95,7 +95,7 @@ All work goes through issues and pull requests that pass the [quality gates](CON
 
 ## Privacy and consent
 
-Sombra records other people and sends excerpts of their speech to an LLM provider. It asks you to confirm participants were told before a meeting starts, keeps frames for 7 days and transcripts for 30 days by default, stores API keys only in the OS keychain, and has a pause shortcut. This is not legal advice; review with counsel before using it in a company setting (LGPD).
+Sombra records other people and sends excerpts of their speech to an LLM provider. It asks you to confirm participants were told before a meeting starts, keeps frames for 7 days and transcripts for 30 days by default, stores API keys only in the OS keychain, and has a pause shortcut (details and commands in [`docs/privacy.md`](docs/privacy.md)). This is not legal advice; review with counsel before using it in a company setting (LGPD).
 
 ## Product spec
 
