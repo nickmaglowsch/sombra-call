@@ -7,6 +7,11 @@ requires-python = ">=3.12"
 license = { text = "Proprietary" }
 dependencies = [
     "anthropic>=1.9.0",
+    "numpy>=2.5.3",
+    "onnxruntime>=1.30.0",
+    "pyobjc-framework-quartz>=10.3 ; sys_platform == 'darwin'",
+    "pyobjc-framework-screencapturekit>=10.3 ; sys_platform == 'darwin'",
+    "pywhispercpp>=1.5.1",
 ]
 
 [project.scripts]
@@ -62,7 +67,7 @@ warn_unreachable = true
 
 [[tool.mypy.overrides]]
 # Native/platform bindings rarely ship type stubs.
-module = ["pyobjc.*", "objc.*", "Quartz.*", "ScreenCaptureKit.*", "AVFoundation.*", "sounddevice.*", "whisper_cpp.*", "pywhispercpp.*", "silero_vad.*", "keyring.*", "gi.*", "dbus.*"]
+module = ["pyobjc.*", "objc.*", "Quartz.*", "ScreenCaptureKit.*", "AVFoundation.*", "sounddevice.*", "whisper_cpp.*", "pywhispercpp.*", "onnxruntime.*", "silero_vad.*", "keyring.*", "gi.*", "dbus.*"]
 ignore_missing_imports = true
 
 [tool.pytest.ini_options]
