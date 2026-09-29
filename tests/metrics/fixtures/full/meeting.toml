@@ -1,0 +1,3 @@
+# Synthetic fixture: every metric has a known answer (see tests/metrics/test_metrics_analysis.py).
+name = "daily-fixture"
+started_at = "2026-09-29T14:30:00-03:00"

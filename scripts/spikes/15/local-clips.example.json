@@ -1,0 +1,26 @@
+[
+  {
+    "id": "codeswitch-1",
+    "path": "codeswitch-1.wav",
+    "kind": "mixed",
+    "license": "consented recording by the speaker, not redistributed",
+    "text": "Nick, o deploy da feature flag ficou pra sexta, mas o pull request ainda está esperando o code review da Mariana.",
+    "names": ["Nick", "Mariana"]
+  },
+  {
+    "id": "codeswitch-2",
+    "path": "codeswitch-2.wav",
+    "kind": "mixed",
+    "license": "consented recording by the speaker, not redistributed",
+    "text": "Na sprint review a gente mostrou o dashboard do Grafana e o Rodrigo perguntou se o backlog do Jira já tinha o roadmap do Q4.",
+    "names": ["Grafana", "Rodrigo", "Jira"]
+  },
+  {
+    "id": "names-1",
+    "path": "names-1.wav",
+    "kind": "pt",
+    "license": "consented recording by the speaker, not redistributed",
+    "text": "Nick, o que você acha desse gráfico que a Letícia mandou ontem no canal do Itaú?",
+    "names": ["Nick", "Letícia", "Itaú"]
+  }
+]

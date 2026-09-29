@@ -1,0 +1,7 @@
+[Desktop Entry]
+Type=Application
+Name=Sombra (spike #16)
+Comment=Throwaway app id for the Wayland spike; lets portals and GNOME attribute notifications
+Exec=/usr/bin/true
+Icon=dialog-question
+NoDisplay=true
