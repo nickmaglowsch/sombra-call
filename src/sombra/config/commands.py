@@ -1,15 +1,48 @@
-"""``sombra new`` and ``sombra profiles list``.
+"""``sombra new``, ``sombra profiles list``, ``sombra config init`` and ``sombra doctor``.
 
 These live in ``config`` rather than ``store`` because they need both: ``config`` is
 a wiring package (see tests/test_architecture.py) and may import ``store``, while
-``store`` may import only ``sombra.contracts``.
+``store`` may import only ``sombra.contracts``. ``doctor`` is here for the same reason:
+it inspects ``transcription``, ``privacy`` and ``audio`` (see ``config/doctor.py``).
 """
 
 from __future__ import annotations
 
 import argparse
+import json
 import sys
 from pathlib import Path
+
+# Written by `sombra config init` (and so by scripts/install.sh). Every value is the
+# default, so the file only makes the keys discoverable; keep in sync with docs/config.md.
+DEFAULT_CONFIG_TOML = """\
+# Sombra user config. Every key is optional; these are the defaults.
+# Reference: docs/config.md. API keys never go here: use `sombra auth set <provider>`.
+
+meetings_root = "~/Sombra/meetings"   # where `sombra new` creates meeting folders
+autonomy_level = "L1"                 # L0 record, L1 suggest, L2 answer after approval
+capture_interval_s = 5                # seconds between screenshots, 1-60
+
+[user]
+name = ""                             # your name; always one of the trigger aliases
+aliases = []                          # other names people call you
+
+[retention]
+frames_days = 7
+transcripts_days = 30
+
+[audio]
+# mic = "MacBook Pro Microphone"      # unset: system default input (see `sombra devices`)
+# system = "BlackHole 2ch"            # unset: platform default loopback/tap
+
+[models]
+stt = "large-v3-turbo"                # whisper.cpp model
+agent = "sonnet"                      # agent backend model alias
+summary = "haiku"                     # rolling summary / minutes model alias
+
+[brain]
+backend = "claude"                    # "claude" or "codex"
+"""
 
 
 def register(subparsers: argparse._SubParsersAction[argparse.ArgumentParser]) -> None:
@@ -25,6 +58,26 @@ def register(subparsers: argparse._SubParsersAction[argparse.ArgumentParser]) ->
     sub = profiles.add_subparsers(dest="profiles_command", metavar="<action>", required=True)
     ls = sub.add_parser("list", help="list the profiles in ~/.config/sombra/profiles/")
     ls.set_defaults(func=_profiles_list)
+
+    config = subparsers.add_parser("config", help="manage the user config file")
+    sub = config.add_subparsers(dest="config_command", metavar="<init|path>", required=True)
+    p = sub.add_parser("init", help="write the default config.toml if there is none")
+    p.add_argument("--config", type=Path, help="where (default: ~/.config/sombra/config.toml)")
+    p.set_defaults(func=_config_init)
+    p = sub.add_parser("path", help="print the user config file path")
+    p.set_defaults(func=_config_path)
+
+    doctor = subparsers.add_parser(
+        "doctor", help="check that this machine is ready and say what is left to do"
+    )
+    doctor.add_argument("--json", action="store_true", help="print JSON instead of text")
+    doctor.add_argument(
+        "--config", type=Path, help="user config file (default: ~/.config/sombra/config.toml)"
+    )
+    doctor.add_argument(
+        "--models-dir", type=Path, help="models folder (default: ~/.cache/sombra/models)"
+    )
+    doctor.set_defaults(func=_doctor)
 
 
 def _new(args: argparse.Namespace) -> int:
@@ -67,3 +120,39 @@ def _profiles_list(args: argparse.Namespace) -> int:
     for p in profiles:
         sys.stdout.write(f"{p.name}\t{p.description}\n" if p.description else f"{p.name}\n")
     return 0
+
+
+def _config_init(args: argparse.Namespace) -> int:
+    from sombra.config.loader import default_config_path
+
+    path: Path = args.config.expanduser() if args.config else default_config_path()
+    if path.exists():
+        sys.stdout.write(f"kept {path} (already exists)\n")
+        return 0
+    path.parent.mkdir(parents=True, exist_ok=True)
+    try:
+        with path.open("x", encoding="utf-8") as f:  # never overwrite, even in a race
+            f.write(DEFAULT_CONFIG_TOML)
+    except FileExistsError:
+        sys.stdout.write(f"kept {path} (already exists)\n")
+        return 0
+    sys.stdout.write(f"created {path}\n")
+    return 0
+
+
+def _config_path(args: argparse.Namespace) -> int:
+    from sombra.config.loader import default_config_path
+
+    sys.stdout.write(f"{default_config_path()}\n")
+    return 0
+
+
+def _doctor(args: argparse.Namespace) -> int:
+    from sombra.config.doctor import exit_code, live_probes, render_json, render_text, run_checks
+
+    checks = run_checks(live_probes(args.config, args.models_dir))
+    if args.json:
+        sys.stdout.write(json.dumps(render_json(checks), ensure_ascii=False, indent=2) + "\n")
+    else:
+        sys.stdout.write(render_text(checks))
+    return exit_code(checks)

@@ -97,3 +97,29 @@ def test_profiles_list_reports_bad_profile(home: Path, capsys: pytest.CaptureFix
 def test_profiles_requires_action(home: Path) -> None:
     with pytest.raises(SystemExit):
         main(["profiles"])
+
+
+def test_config_init_writes_defaults_once(home: Path, capsys: pytest.CaptureFixture[str]) -> None:
+    from sombra.config import UserConfig, load_user_config
+
+    path = home / "cfg" / "sombra" / "config.toml"
+    assert main(["config", "init"]) == 0
+    assert capsys.readouterr().out == f"created {path}\n"
+    cfg = load_user_config(path)
+    assert cfg == UserConfig(meetings_root=home / "Sombra" / "meetings")
+
+    path.write_text('autonomy_level = "L2"\n')
+    assert main(["config", "init"]) == 0
+    assert capsys.readouterr().out == f"kept {path} (already exists)\n"
+    assert path.read_text() == 'autonomy_level = "L2"\n'  # never overwritten
+
+
+def test_config_init_explicit_path_and_path_command(
+    home: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    target = home / "x" / "c.toml"
+    assert main(["config", "init", "--config", str(target)]) == 0
+    assert target.is_file()
+    capsys.readouterr()
+    assert main(["config", "path"]) == 0
+    assert capsys.readouterr().out == f"{home / 'cfg' / 'sombra' / 'config.toml'}\n"
