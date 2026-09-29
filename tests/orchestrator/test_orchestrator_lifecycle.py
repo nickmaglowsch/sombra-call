@@ -174,3 +174,20 @@ def test_default_settings_match_the_prd() -> None:
     assert 5 <= s.screen_interval_s <= 10
     assert s.max_frames == 3
     assert s.autonomy is AutonomyLevel.L2
+
+
+async def test_hung_minutes_and_close_do_not_hang_stop(tmp_path: Path) -> None:
+    async def hang() -> None:
+        await asyncio.Event().wait()
+
+    rig = await make_rig(
+        tmp_path,
+        script=chatter(3),
+        minutes=hang,
+        settings={"minutes_timeout_s": 0.05, "close_timeout_s": 0.05},
+    ).start()
+    rig.audio.close = hang  # type: ignore[method-assign]
+    started = time.monotonic()
+    await rig.stop()
+    assert time.monotonic() - started < 1
+    assert rig.screen.closed and rig.brain.closed

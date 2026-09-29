@@ -28,6 +28,12 @@ class TriggerRule:
 
 
 class ScriptedTriggerDetector:
+    """Fires on the rules, in order; the first matching rule wins.
+
+    ``TriggerEvent.ts`` is the speech line's ``ts``. The contract means the *end*
+    of the utterance; a scripted line has no duration, so here the two coincide.
+    """
+
     def __init__(self, rules: Iterable[TriggerRule]) -> None:
         self.rules = list(rules)
         self.fed: list[TimelineEntry] = []

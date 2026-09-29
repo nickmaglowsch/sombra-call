@@ -3,10 +3,10 @@
 from __future__ import annotations
 
 import json
-from datetime import timedelta
+from datetime import datetime, timedelta
 from pathlib import Path
 
-from orchestrator_harness import chatter, make_rig, speech, until
+from orchestrator_harness import BASE, chatter, make_rig, speech, until
 
 from fakes import FakeAudioSource, TriggerRule
 from sombra.contracts import ActionKind, Channel, FrameMarker, SpeechLine, Usage
@@ -34,6 +34,11 @@ async def test_ten_minute_meeting_with_three_triggers(tmp_path: Path) -> None:
         epochs.append(n)
         return EpochSummary(model="fake-summary", usage=Usage(input_tokens=10))
 
+    def two_seconds_after_last_question() -> datetime:
+        """Suggestions appear 2 s (meeting time) after the question ended."""
+        fired = rig.detector.fired
+        return (fired[-1].ts if fired else BASE) + timedelta(seconds=2)
+
     script = meeting_script()
     rig = make_rig(
         tmp_path,
@@ -47,8 +52,7 @@ async def test_ten_minute_meeting_with_three_triggers(tmp_path: Path) -> None:
         settings={"epoch_interval_s": 0.1},
         summarizer=summarize,
         epoch_hook=hook.append,
-        # Suggestions appear 2 s (meeting time) after the question ended.
-        clock=lambda: rig.detector.fed[-1].ts + timedelta(seconds=2),
+        clock=two_seconds_after_last_question,
     )
     rig.ui.script = [
         (ActionKind.APPROVE, None),

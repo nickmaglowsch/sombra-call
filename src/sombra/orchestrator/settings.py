@@ -20,6 +20,9 @@ class SessionSettings:
     restart_backoff_s: float = 0.5  # first restart delay of a crashed pipeline task
     restart_backoff_max_s: float = 30.0
     drain_timeout_s: float = 30.0  # stop(): how long to wait for queues to drain
+    ui_timeout_s: float = 5.0  # a hung overlay call must not wedge the trigger task
+    minutes_timeout_s: float = 300.0  # stop(): end-of-meeting minutes (an LLM call)
+    close_timeout_s: float = 5.0  # stop(): each port's close()
 
     def __post_init__(self) -> None:
         positive = {
@@ -30,6 +33,9 @@ class SessionSettings:
             "restart_backoff_s": self.restart_backoff_s,
             "restart_backoff_max_s": self.restart_backoff_max_s,
             "drain_timeout_s": self.drain_timeout_s,
+            "ui_timeout_s": self.ui_timeout_s,
+            "minutes_timeout_s": self.minutes_timeout_s,
+            "close_timeout_s": self.close_timeout_s,
         }
         for name, value in positive.items():
             if value <= 0:

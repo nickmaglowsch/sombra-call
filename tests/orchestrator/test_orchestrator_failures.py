@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 from pathlib import Path
 
 from orchestrator_harness import Rig, chatter, make_rig, speech, until
@@ -121,3 +122,64 @@ async def test_overlay_failure_is_logged_as_error(tmp_path: Path) -> None:
     (err,) = errors(rig)
     assert err.error == "overlay: RuntimeError: overlay gone"
     assert not any(isinstance(e, SuggestionLogged) for e in rig.store.events)
+
+
+class HangingOverlay(FakeUI):
+    def __init__(self, *, notify: bool = False, show: bool = False) -> None:
+        super().__init__()
+        self.hang_notify, self.hang_show = notify, show
+
+    async def notify_trigger(self, trigger: TriggerEvent) -> None:
+        if self.hang_notify:
+            await asyncio.Event().wait()
+
+    async def show(self, suggestion: Suggestion) -> None:
+        if self.hang_show:
+            await asyncio.Event().wait()
+        await super().show(suggestion)
+
+
+async def test_hung_notify_trigger_times_out_and_the_answer_still_shows(tmp_path: Path) -> None:
+    ui = HangingOverlay(notify=True)
+    rig = await make_rig(
+        tmp_path,
+        script=script_with_questions(20),
+        rules=RULES,
+        ui=ui,
+        settings={"ui_timeout_s": 0.05},
+    ).start()
+    await until(lambda: any(isinstance(e, SuggestionLogged) for e in rig.store.events), what="ok")
+    await rig.stop()
+    assert errors(rig) == []
+
+
+async def test_hung_overlay_show_is_a_failure_not_a_wedged_trigger_task(tmp_path: Path) -> None:
+    rig = await make_rig(
+        tmp_path,
+        script=script_with_questions(40, at=(5, 30)),
+        rules=RULES,
+        ui=HangingOverlay(show=True),
+        settings={"ui_timeout_s": 0.05},
+    ).start()
+    await until(lambda: len(rig.ui.failures) == 2, what="both triggers fail, none wedged")
+    await rig.stop()
+    assert [e.error for e in errors(rig)] == ["overlay: TimeoutError"] * 2
+    assert rig.session.dropped_triggers == 0
+
+
+async def test_frame_resolver_error_takes_the_failure_path(tmp_path: Path) -> None:
+    def broken(frame_id: str) -> Path | None:
+        raise OSError(f"cannot stat {frame_id}")
+
+    rig = await make_rig(
+        tmp_path,
+        script=script_with_questions(20),
+        rules=[TriggerRule("nick", needs_screen=True, candidate_frames=["f0001"])],
+        resolve_frame=broken,
+    ).start()
+    await until(lambda: len(rig.ui.failures) == 1, what="failure notice")
+    await rig.stop()
+    (err,) = errors(rig)
+    assert err.error == "OSError: cannot stat f0001"
+    assert rig.brain.requests == []
+    assert rig.session.pipelines["triggers"].restarts == 0

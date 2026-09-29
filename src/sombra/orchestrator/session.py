@@ -219,12 +219,12 @@ class Session:
             if self._brain_start is not None and not self._brain_start.done():
                 self._brain_start.cancel()
             if self._minutes is not None:
-                await self._guard("minutes", self._minutes())
-            await self._guard("audio.close", self._audio.close())
-            await self._guard("screen.close", self._screen.close())
+                await self._guard("minutes", self._minutes(), self.settings.minutes_timeout_s)
+            await self._guard("audio.close", self._audio.close(), self.settings.close_timeout_s)
+            await self._guard("screen.close", self._screen.close(), self.settings.close_timeout_s)
             if self._brain_start is not None:
                 await asyncio.gather(self._brain_start, return_exceptions=True)
-                await self._guard("brain.close", self._brain.close())
+                await self._guard("brain.close", self._brain.close(), self.settings.close_timeout_s)
         finally:
             self._done.set()
 
@@ -255,9 +255,13 @@ class Session:
         await asyncio.gather(*tasks, return_exceptions=True)
 
     @staticmethod
-    async def _guard(what: str, aw: Awaitable[None]) -> bool:
+    async def _guard(what: str, aw: Awaitable[None], timeout_s: float) -> bool:
+        """Await a call into another module; log (never raise) its errors and hangs."""
         try:
-            await aw
+            await asyncio.wait_for(aw, timeout_s)
+        except TimeoutError:
+            log.error("%s: no return after %g s", what, timeout_s)
+            return False
         except Exception:
             log.exception("%s failed", what)
             return False
@@ -350,11 +354,13 @@ class Session:
         dispatched = time.perf_counter()
         # The overlay's "looking up context..." state runs alongside the brain call.
         notify = asyncio.create_task(
-            self._guard("ui.notify_trigger", self._ui.notify_trigger(event))
+            self._guard(
+                "ui.notify_trigger", self._ui.notify_trigger(event), self.settings.ui_timeout_s
+            )
         )
-        request = BrainRequest(trigger=event, frame_paths=tuple(self._frame_paths(event)))
         reason: str | None = None
         try:
+            request = BrainRequest(trigger=event, frame_paths=tuple(self._frame_paths(event)))
             response = await asyncio.wait_for(self._ask(request), self.settings.brain_timeout_s)
         except TimeoutError:
             reason = f"timeout: no answer after {self.settings.brain_timeout_s:g} s"
@@ -362,7 +368,7 @@ class Session:
             notify.cancel()
             raise
         except Exception as exc:
-            reason = f"{type(exc).__name__}: {exc}"
+            reason = _describe(exc)
         log.debug("trigger %s: brain %.1f ms", event.id, (time.perf_counter() - dispatched) * 1e3)
         await notify
         if reason is not None:
@@ -377,10 +383,10 @@ class Session:
             frames_sent=tuple(response.frames_sent),
         )
         try:
-            await self._ui.show(suggestion)
+            await asyncio.wait_for(self._ui.show(suggestion), self.settings.ui_timeout_s)
         except Exception as exc:
             log.exception("ui.show failed for trigger %s", event.id)
-            await self._fail(event, f"overlay: {type(exc).__name__}: {exc}")
+            await self._fail(event, f"overlay: {_describe(exc)}")
             return
         shown_at = self._now()
         self._suggestions[suggestion.id] = suggestion.text
@@ -407,7 +413,9 @@ class Session:
     async def _fail(self, event: TriggerEvent, reason: str) -> None:
         log.warning("trigger %s: %s", event.id, reason)
         self._store.log(AgentErrorLogged(trigger_id=event.id, ts=self._now(), error=reason))
-        await self._guard("ui.notify_failure", self._ui.notify_failure(event, reason))
+        await self._guard(
+            "ui.notify_failure", self._ui.notify_failure(event, reason), self.settings.ui_timeout_s
+        )
 
     def _frame_paths(self, event: TriggerEvent) -> list[Path]:
         if not event.needs_screen:
@@ -447,6 +455,12 @@ class Session:
             )
 
     async def _run_epochs(self) -> None:
+        """Every ``epoch_interval_s``: summarize, then move the prefix to the new epoch.
+
+        A failing summarizer crashes this task, so the epoch does not advance and the
+        restarted task tries again one full interval later: a stale summary for a few
+        more minutes costs less than hammering a failing API.
+        """
         summarizer = self._summarizer
         if summarizer is None:
             return
@@ -462,6 +476,10 @@ class Session:
                     ts=self._now(), epoch=epoch, model=summary.model, usage=summary.usage
                 )
             )
+
+
+def _describe(exc: BaseException) -> str:
+    return f"{type(exc).__name__}: {exc}" if str(exc) else type(exc).__name__
 
 
 def _excerpt(event: TriggerEvent, lines: int = 3) -> str:
