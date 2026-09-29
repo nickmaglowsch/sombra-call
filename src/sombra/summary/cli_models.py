@@ -45,8 +45,10 @@ CLAUDE_FIXED_ENV = {"CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC": "1", "DISABLE_AU
 
 # Codex features that add a tool; all switched off for a text-only run (codex 0.159.1).
 # They are not enough: 0.159.1 still offers the model code-mode ``exec``/``wait``,
-# ``request_user_input`` and the ``collaboration.*`` sub-agent tools, and no feature or
-# config key removes them (ADR 0046). The allowlist below is the enforcement.
+# ``request_user_input`` and the ``collaboration.*`` sub-agent tools, no feature or config
+# key removes them, and their calls never show up in ``--json`` output (ADR 0046). What
+# contains them is the permission profile (no folder, no writes, no network) and
+# ``--ephemeral``, under which ``spawn_agent`` fails; see ``CodexCliTextModel.argv``.
 CODEX_TOOL_FEATURES = (
     "shell_tool",
     "unified_exec",
@@ -63,8 +65,9 @@ CODEX_TOOL_FEATURES = (
     "sleep_tool",
     "hooks",
 )
-# Item types a text-only run may produce. Anything else (a command, a file change, a
-# code-mode or sub-agent call, or a type a newer Codex adds) voids the output.
+# Item types a text-only run may produce. Any other item Codex does report (a command,
+# a file change, a web search, an MCP call, or a type a newer Codex adds) voids the
+# output. A tripwire only: code-mode and sub-agent calls emit no item at all.
 CODEX_INERT_ITEMS = frozenset({"agent_message", "reasoning", "error"})
 
 
@@ -378,6 +381,8 @@ class CodexCliTextModel(_CliTextModel):
 
     def argv(self, work: Path, system: str) -> list[str]:
         argv = [*self._executable, "exec", "--json", "--color", "never"]
+        # --ephemeral must stay: besides writing no session file, it is what makes the
+        # (unremovable) ``collaboration.spawn_agent`` tool fail on 0.159.1 (ADR 0046).
         argv += ["--ephemeral", "--skip-git-repo-check", "--ignore-user-config", "--ignore-rules"]
         argv += ["--cd", str(work)]
         argv += [

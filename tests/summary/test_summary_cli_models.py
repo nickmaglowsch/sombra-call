@@ -251,6 +251,8 @@ def test_codex_text_model_runs_without_tools(monkeypatch: pytest.MonkeyPatch) ->
     assert argv[:2] == ["codex", "exec"] and argv[-1] == "-"
     for flag in ("--ephemeral", "--ignore-user-config", "--ignore-rules", "--skip-git-repo-check"):
         assert flag in argv
+    # Load-bearing on 0.159.1: without it the unremovable spawn_agent tool could run.
+    assert argv.count("--ephemeral") == 1 and argv.index("--ephemeral") < argv.index("-")
     disabled = {v for f, v in itertools.pairwise(argv) if f == "--disable"}
     assert disabled == set(CODEX_TOOL_FEATURES)
     assert 'permissions.sombra.filesystem={":minimal"="read"}' in argv
