@@ -85,6 +85,11 @@ PERMISSION_PROFILE = "sombra"
 # Oldest CLI verified to honour every confinement flag (ADR 0018). An older CLI may
 # ignore ``default_permissions`` and read the whole disk, so it is refused.
 MIN_CLI_VERSION = (0, 159, 1)
+# Newest CLI whose tool set was verified by request capture (ADR 0018, #57). A newer
+# one may offer a tool the catalog and flags don't remove, so it is refused until
+# ``tests/brain/test_brain_codex_capture.py`` passes on it and this is raised.
+MAX_TESTED_CLI_VERSION = (0, 159, 1)
+CAPTURE_TEST = "uv run pytest tests/brain/test_brain_codex_capture.py"
 API_KEY_ENV = "CODEX_API_KEY"  # read by ``codex exec`` (codex-rs/login)
 
 # Environment variables passed through to the Codex process. Nothing else is
@@ -557,7 +562,7 @@ class CodexBrain:
     # --- internals -------------------------------------------------------------------
 
     async def _check_version(self, cwd: Path) -> None:
-        """Fail closed on a CLI too old for the permission profile (see MIN_CLI_VERSION)."""
+        """Fail closed on a CLI outside the verified range (see MIN/MAX_TESTED_CLI_VERSION)."""
         argv = [*self.settings.executable, "--version"]
         result = await self._runner.run(
             argv, stdin="", env=process_env(None), cwd=cwd, timeout_s=self.settings.timeout_s
@@ -567,6 +572,14 @@ class CodexBrain:
             found = result.stdout.strip() or result.stderr.strip() or "unknown"
             need = ".".join(map(str, MIN_CLI_VERSION))
             raise BrainError(f"Codex CLI {need} or newer is required (found: {found[:100]})")
+        if version > MAX_TESTED_CLI_VERSION:
+            tested = ".".join(map(str, MAX_TESTED_CLI_VERSION))
+            raise BrainError(
+                f"Codex CLI {'.'.join(map(str, version))} is newer than {tested}, the last "
+                "version whose tools were verified; it could give the agent tools Sombra "
+                f"doesn't remove. Install it with `npm i -g @openai/codex@{tested}`, or "
+                f"verify the new one with `{CAPTURE_TEST}` and raise MAX_TESTED_CLI_VERSION."
+            )
 
     async def _write_catalog(self, cwd: Path) -> None:
         """Write the tool-free model catalog every run loads (see :data:`CATALOG_OVERRIDES`).

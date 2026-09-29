@@ -743,7 +743,7 @@ async def test_deadline_covers_the_whole_answer(meeting: Path) -> None:
 FAKE_CODEX = r"""
 import json, os, subprocess, sys, time
 if sys.argv[1:] == ["--version"]:
-    print("codex-cli 0.160.0")
+    print("codex-cli 0.159.1")
     sys.exit(0)
 if sys.argv[1:] == ["debug", "models", "--bundled"]:
     print(json.dumps({"models": [{"slug": "m", "tool_mode": "code_mode_only"}]}))
@@ -896,9 +896,23 @@ async def test_old_or_unknown_cli_is_refused(meeting: Path, result: ProcessResul
     assert fake.calls == []
 
 
+@pytest.mark.parametrize("found", ["0.159.2", "0.160.0", "1.0.0"])
+async def test_cli_newer_than_the_verified_one_is_refused(meeting: Path, found: str) -> None:
+    """#57: a newer CLI may offer tools nobody has captured yet, so it fails closed."""
+    fake = FakeCodex()
+    fake.version = ProcessResult(0, f"codex-cli {found}\n", "")
+    brain = CodexBrain(settings(), fake)
+    with pytest.raises(BrainError, match=r"newer than 0\.159\.1") as err:
+        await brain.start(meeting)
+    assert "npm i -g @openai/codex@0.159.1" in str(err.value)
+    assert "test_brain_codex_capture.py" in str(err.value)
+    assert fake.catalog_reads == 0
+    assert fake.calls == []
+
+
 async def test_version_is_checked_once_per_start(meeting: Path) -> None:
     fake = FakeCodex()
-    fake.version = ProcessResult(0, "codex-cli 1.0.0", "")
+    fake.version = ProcessResult(0, "codex-cli 0.159.1 (build x)", "")
     brain = await started(meeting, fake)
     await brain.answer(BrainRequest(trigger()))
     await brain.answer(BrainRequest(trigger()))

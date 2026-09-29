@@ -8,6 +8,9 @@ network: the endpoint is ``127.0.0.1``. Run it by hand after a Codex upgrade::
     npm i -g @openai/codex@<version>
     uv run pytest tests/brain/test_brain_codex_capture.py -v
 
+It runs past ``MAX_TESTED_CLI_VERSION``: passing on a newer CLI is what allows
+raising that cap (ADR 0018).
+
 A forced tool call also shows why the request is the control that matters: on
 0.159.1 a code-mode ``exec`` or a ``spawn_agent`` call leaves no item in the JSONL,
 so no output guard could have seen it.
@@ -27,6 +30,7 @@ from typing import Any
 import pytest
 from test_brain_codex import trigger
 
+import sombra.brain.codex as codex_module
 from sombra.brain.codex import (
     API_KEY_ENV,
     MIN_CLI_VERSION,
@@ -129,6 +133,12 @@ def codex() -> str:
     if version is None or version < MIN_CLI_VERSION:
         pytest.skip(f"codex CLI too old: {out.strip()}")
     return exe
+
+
+@pytest.fixture(autouse=True)
+def verify_any_installed_version(monkeypatch: pytest.MonkeyPatch) -> None:
+    """This test is how a newer CLI gets verified, so it must run past the cap."""
+    monkeypatch.setattr(codex_module, "MAX_TESTED_CLI_VERSION", (999, 0, 0))
 
 
 @pytest.fixture

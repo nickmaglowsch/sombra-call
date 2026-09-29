@@ -77,7 +77,7 @@ What the Codex source says (openai/codex at `94d642d`, 2026-09-29; the same code
 - **The agent has a shell**, confined as above, instead of our three tools. It can run `rg`, `cat` and `ls` in the folder but can't write, reach the network or leave the folder's read scope. Our `brain.tools` limits (no regex in grep, size caps) do not apply to Codex.
 - **Process start is paid on every trigger.** The CLI's startup time counts against the 2–4 s LLM budget. There is no warm-up equivalent to Claude's `max_tokens: 0` request. OpenAI prompt caching is automatic on a byte-stable prefix. Codex's base instructions, tools and our developer instructions come first, then the append-only prefix, then the tail. Each run is a new thread, so the cache key differs per run; whether the prefix still hits the cache has to be measured.
 - **Version dependency, fail closed.** `default_permissions` profiles, `--ignore-rules` and `--ignore-user-config` must exist; they do in `rust-v0.159.1`. An older CLI might ignore the profile and fall back to its default exec sandbox, which can read the whole disk. So `CodexBrain.start()` runs `codex --version` and raises `BrainError` below `MIN_CLI_VERSION = 0.159.1`, or when no version can be read. A newer CLI that rejects a flag exits non-zero, which raises `BrainAPIError`. The network injection test below catches a newer CLI that changes semantics.
-- **The tool set depends on the catalog format (#57).** A newer CLI can add a catalog field that brings back a tool, or a feature that isn't catalog-driven. `test_brain_codex_capture.py` catches both when run against that CLI, and the JSONL allowlist catches whatever it reports. After any Codex upgrade, run the capture test before raising `MIN_CLI_VERSION`. A `--disable` for a feature the CLI no longer knows makes Codex exit non-zero, so a removed flag fails closed too.
+- **The tool set is verified per CLI version, and newer CLIs are refused (#57).** A newer CLI can add a catalog field that brings back a tool, or a feature that isn't catalog-driven. Neither our overrides nor the allowlist would necessarily catch it. So `start()` also refuses any CLI above `MAX_TESTED_CLI_VERSION = 0.159.1`, the last version the capture was run on. The error names the pinned install command (`npm i -g @openai/codex@0.159.1`) and the capture test. The cost: every Codex upgrade breaks the Codex backend until a maintainer reruns `test_brain_codex_capture.py` on it and raises the cap. That test ignores the cap, so it can run on the new version. We accept this cost: the alternative is an agent with tools nobody has looked at, driven by untrusted meeting text. A `--disable` for a feature the CLI no longer knows also makes Codex exit non-zero, so a removed flag fails closed too.
 - **A model outside the bundled catalog** (e.g. `[brain] model` set to a newer slug) runs on Codex's fallback metadata. On 0.159.1 that offers the same two shell tools, plus a `Model metadata … not found` warning item that we log.
 - **Timeouts kill the whole process tree.** The CLI runs in its own session (process group). On timeout or cancellation, the group gets `SIGKILL`, so sandbox helpers and shell commands die with it. Otherwise an orphan holding the pipes would keep the answer waiting past its deadline.
 - A failure never stops capture: every error is a `BrainError` subclass, which the orchestrator logs as `AgentErrorLogged` (invariant 5).
@@ -108,6 +108,8 @@ Forced tool calls (the fake endpoint's first reply is the call; the second reque
 | `collaboration.spawn_agent` | reached the handler; it failed only because `--ephemeral` leaves no rollout for the child; **no JSONL item** | `unsupported call: collaborationspawn_agent` |
 | `exec` calling `tools.exec_command` | `command_execution` item | tool not offered |
 | `exec_command {"cmd": "ls"}` | `command_execution` item | `command_execution` item |
+| raw `local_shell_call` (from the PR #59 review's own probe) | — | dropped silently: nothing ran, no item, no follow-up request |
+| `web_search_call` (same probe) | — | a `web_search` item, which the allowlist voids |
 
 Found while doing this, out of #57's scope:
 
@@ -126,7 +128,7 @@ What actually stops an agent driven by untrusted meeting text, strongest first:
 
 Residual risk:
 
-- **A newer CLI can offer a new tool.** It could come from a catalog field or feature we don't clear, or from one that emits no item, so layers 1 and 5 would both miss it. Layers 2 to 4 still hold. Mitigation: rerun the capture test before raising `MIN_CLI_VERSION` (see Consequences).
+- **A newer CLI could offer a new tool.** It could come from a catalog field or feature we don't clear, or from one that emits no item, so layers 1 and 5 would both miss it. The mitigation is in code: `start()` refuses any CLI above `MAX_TESTED_CLI_VERSION` (0.159.1), so Sombra never runs an unverified tool set. Rerunning the capture test and raising the cap is the maintainer process for accepting a new version, not a user-side mitigation. If the cap is raised without that capture, or someone runs `codex` outside Sombra, only layer 2 (the permission profile) is designed to hold on an unverified version. Layers 3 and 4 were observed on 0.159.1 only.
 - **The accepted shell remains.** The agent can run read-only commands in the meeting folder and read the world-readable `:minimal` roots (`/etc`, `/usr`). That was already accepted in #18.
 - **A ChatGPT login isn't verified yet.** The remote catalog refresh might override `model_catalog_json`; the live check is in the table below.
 
@@ -140,7 +142,7 @@ CODEX_API_KEY=... ANTHROPIC_API_KEY=... \
     uv run pytest -m network tests/brain/test_brain_codex_network.py -s -k side_by_side
 # #57 with a ChatGPT login: the refreshed catalog must not override ours
 SOMBRA_CODEX_LOGIN=1 uv run pytest -m network tests/brain/test_brain_codex_network.py -s -k live_catalog
-# offline, no key: the request capture (already run for 0.159.1; rerun after any upgrade)
+# offline, no key: the request capture (done for 0.159.1; required before raising MAX_TESTED_CLI_VERSION)
 uv run pytest tests/brain/test_brain_codex_capture.py -v
 ```
 
@@ -150,7 +152,7 @@ uv run pytest tests/brain/test_brain_codex_capture.py -v
 | p50 / p95 latency, Codex vs Claude (`test_side_by_side_with_claude`) | *pending human run* |
 | Tokens (uncached / cache read / write / out) and cost per 5 answers, Codex vs Claude | *pending human run* (cost = tokens × the provider's price page on the day of the run) |
 | Injection: canary in `~` never read, nothing written outside, no forbidden item (`test_injection_reads_and_writes_nothing_outside`) | *pending human run* |
-| Codex CLI version used (must be ≥ 0.159.1; `start()` refuses older) | *pending human run* |
+| Codex CLI version used (must be exactly 0.159.1 for now; `start()` refuses older and newer) | *pending human run* |
 | Request offers only `exec_command` + `write_stdin` (`test_brain_codex_capture.py`, offline) | **passed** on 0.159.1, Linux x86-64 (default model, `gpt-5.5`, unknown slug; forced `exec` and `spawn_agent` refused) |
 | Same capture on macOS | *pending human run* |
 | With a ChatGPT login, `codex debug models` + our catalog shows no tool fields, and a live answer asked to use `spawn_agent`/`exec` has no item off the allowlist (`test_live_catalog_and_run_offer_no_code_mode_or_subagents`) | *pending human run* |
