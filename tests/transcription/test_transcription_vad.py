@@ -183,3 +183,29 @@ def test_settings_validation() -> None:
 def test_pcm_from_bytes_round_trip() -> None:
     pcm = tone(0.01)
     assert np.array_equal(pcm_from_bytes(pcm.astype("<f4").tobytes()), pcm)
+
+
+class ToneDetector:
+    """Speech = energy at 220 Hz, whatever the loudness; white noise is not speech."""
+
+    def __call__(self, frame: np.ndarray) -> float:
+        return 0.9 if float(np.abs(np.fft.rfft(frame))[7]) > 0.5 else 0.02  # bin 7 = 219 Hz
+
+    def reset(self) -> None:
+        pass
+
+
+def test_soft_syllables_near_the_noise_floor_do_not_split_an_utterance() -> None:
+    """Inside an utterance only the absolute gate applies, so the VAD hears quiet speech."""
+    rng = np.random.default_rng(9)
+    noise = (rng.standard_normal(16000 * 44) * 3e-3).astype(np.float32)  # -50 dBFS room
+    speech = concat(tone(1.0), tone(1.0, amp=0.004), tone(1.0))  # the middle is ~-51 dBFS
+    audio = noise.copy()
+    audio[16000 * 40 : 16000 * 43] += speech
+    seg = Segmenter(ToneDetector())
+    out: list[Segment] = []
+    for i in range(0, len(audio), 1600):
+        out += seg.feed(T0 + timedelta(seconds=i / 16000), audio[i : i + 1600])
+    out += seg.flush()
+    assert len(out) == 1
+    assert near(out[0].start, 40.0) and near(out[0].end, 43.0)

@@ -141,17 +141,40 @@ class WhisperTranscriber:
     async def _run(
         self, chunks: AsyncIterator[AudioChunk], out: asyncio.Queue[SpeechLine | None]
     ) -> None:
+        # A live stream never ends, so a dead channel pipeline must surface on its own:
+        # the first task failure lands here and stops the whole stream (orchestrator restarts).
+        failure: asyncio.Future[None] = asyncio.get_running_loop().create_future()
         pipes: dict[Channel, _ChannelPipeline] = {}
-        try:
+
+        async def consume() -> None:
             async for chunk in chunks:
                 pipe = pipes.get(chunk.channel)
                 if pipe is None:
-                    pipe = pipes[chunk.channel] = _ChannelPipeline(chunk.channel, self, out)
+                    pipe = pipes[chunk.channel] = _ChannelPipeline(
+                        chunk.channel, self, out, failure
+                    )
                 pipe.feed(chunk)
             for pipe in pipes.values():
                 pipe.end_of_input()
             await asyncio.gather(*(p.done() for p in pipes.values()))
+
+        consumer = asyncio.create_task(consume())
+        try:
+            await asyncio.wait({consumer, failure}, return_when=asyncio.FIRST_COMPLETED)
+            if failure.done():
+                failure.result()  # raises the pipeline's error
+            consumer.result()
         finally:
+            if not consumer.done():
+                consumer.cancel()
+                with contextlib.suppress(asyncio.CancelledError):
+                    await consumer
+            elif not consumer.cancelled():
+                consumer.exception()  # mark retrieved; the failure is what we raised
+            if not failure.done():
+                failure.cancel()
+            elif not failure.cancelled():
+                failure.exception()  # mark retrieved
             for pipe in pipes.values():
                 pipe.shutdown()
             out.put_nowait(None)
@@ -159,11 +182,16 @@ class WhisperTranscriber:
 
 class _ChannelPipeline:
     def __init__(
-        self, channel: Channel, owner: WhisperTranscriber, out: asyncio.Queue[SpeechLine | None]
+        self,
+        channel: Channel,
+        owner: WhisperTranscriber,
+        out: asyncio.Queue[SpeechLine | None],
+        failure: asyncio.Future[None],
     ) -> None:
         self.channel = channel
         self._owner = owner
         self._out = out
+        self._failure = failure
         self._chunks: asyncio.Queue[AudioChunk | None] = asyncio.Queue()
         self._segments: asyncio.Queue[Segment | None] = asyncio.Queue()
         name = channel.name.lower()
@@ -176,6 +204,15 @@ class _ChannelPipeline:
             asyncio.create_task(self._segment_loop()),
             asyncio.create_task(self._stt_loop()),
         ]
+        for task in self._tasks:
+            task.add_done_callback(self._report_failure)
+
+    def _report_failure(self, task: asyncio.Task[None]) -> None:
+        if task.cancelled() or self._failure.done():
+            return
+        if (exc := task.exception()) is not None:
+            log.error("%s transcription pipeline failed: %r", self.channel, exc)
+            self._failure.set_exception(exc)
 
     def feed(self, chunk: AudioChunk) -> None:
         self._chunks.put_nowait(chunk)  # unbounded: audio is never dropped
@@ -231,13 +268,15 @@ class _ChannelPipeline:
             if text is not None:
                 self._out.put_nowait(SpeechLine(ts=seg.start, channel=self.channel, text=text))
             if self._owner._on_stat is not None:
-                self._owner._on_stat(
-                    SegmentStat(
-                        channel=self.channel,
-                        speech_end=seg.end,
-                        emitted_at=_now_like(seg.end),
-                        audio_s=seg.duration_s,
-                        stt_s=stt_s,
-                        text=text,
-                    )
+                stat = SegmentStat(
+                    channel=self.channel,
+                    speech_end=seg.end,
+                    emitted_at=_now_like(seg.end),
+                    audio_s=seg.duration_s,
+                    stt_s=stt_s,
+                    text=text,
                 )
+                try:
+                    self._owner._on_stat(stat)
+                except Exception:  # a metrics hook must never stop transcription
+                    log.exception("on_stat callback failed")

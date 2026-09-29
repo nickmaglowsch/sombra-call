@@ -19,6 +19,9 @@ DEFAULT_HALLUCINATIONS: tuple[str, ...] = (
     "legenda adriana zanotto",
     "legendado por",
     "transcricao e legendas",
+    # Deliberate trade-off: a lone thanks is dropped even when really said (end of a call);
+    # it is Whisper's most common output on near-silence and carries little meaning.
+    # Could be kept for long or loud segments later.
     "obrigado",
     "obrigada",
     "muito obrigado",

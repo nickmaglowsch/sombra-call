@@ -226,3 +226,77 @@ async def test_from_settings_needs_downloaded_models(tmp_path: Path) -> None:
 def test_from_settings_rejects_unknown_model(tmp_path: Path) -> None:
     with pytest.raises(ValueError, match="unknown whisper model"):
         WhisperTranscriber.from_settings(TranscriptionSettings(model="huge", models_dir=tmp_path))
+
+
+# --- failures on a live (never-ending) stream must surface, not hang -------------------
+
+
+async def endless(channel: Channel = Channel.ME) -> AsyncIterator[AudioChunk]:
+    """Live-capture style: an utterance every 2 s, forever."""
+    block = concat(tone(1.0), silence(1.0))
+    start = T0
+    while True:
+        for c in chunks(block, channel, start=start):
+            yield c
+            await asyncio.sleep(0.001)
+        start += timedelta(seconds=2)
+
+
+async def test_failing_stt_factory_surfaces_on_a_live_stream() -> None:
+    def broken(_ch: Channel) -> ScriptedStt:
+        raise FileNotFoundError("model missing")
+
+    t = WhisperTranscriber(detector_factory=lambda _ch: AmplitudeDetector(), stt_factory=broken)
+    with pytest.raises(FileNotFoundError, match="model missing"):
+        async with asyncio.timeout(5):
+            async for _ in t.transcribe(endless()):
+                pass
+
+
+async def test_failing_detector_surfaces_on_a_live_stream() -> None:
+    class Dies(AmplitudeDetector):
+        def __call__(self, frame: object) -> float:
+            if self.calls >= 20:
+                raise RuntimeError("onnxruntime error")
+            return super().__call__(frame)  # type: ignore[arg-type]
+
+    t = WhisperTranscriber(
+        detector_factory=lambda _ch: Dies(), stt_factory=lambda _ch: ScriptedStt()
+    )
+    with pytest.raises(RuntimeError, match="onnxruntime error"):
+        async with asyncio.timeout(5):
+            async for _ in t.transcribe(endless()):
+                pass
+
+
+async def test_failing_on_stat_does_not_stop_transcription(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    def bad_hook(_stat: SegmentStat) -> None:
+        raise ValueError("logging broke")
+
+    t = WhisperTranscriber(
+        detector_factory=lambda _ch: AmplitudeDetector(),
+        stt_factory=lambda _ch: ScriptedStt(["um", "dois", "três"]),
+        on_stat=bad_hook,
+    )
+    got: list[str] = []
+    stream = t.transcribe(endless())
+    try:
+        async with asyncio.timeout(5):
+            while len(got) < 3:
+                line = await anext(stream)
+                assert isinstance(line, SpeechLine)
+                got.append(line.text)
+    finally:
+        await stream.aclose()
+    assert got == ["um", "dois", "três"]
+    assert "on_stat callback failed" in caplog.text
+
+
+async def test_cancelling_a_live_stream_shuts_down_cleanly() -> None:
+    t = make({Channel.ME: ScriptedStt()})
+    stream = t.transcribe(endless())
+    first = await asyncio.wait_for(anext(stream), 5)
+    assert isinstance(first, SpeechLine)
+    await stream.aclose()

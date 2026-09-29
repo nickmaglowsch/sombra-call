@@ -6,8 +6,9 @@ frame, and closes an utterance after ``min_silence_ms`` of silence or, when an u
 runs past ``max_utterance_s``, forces a cut at the quietest frame of its last few seconds.
 
 Two energy gates keep silence cheap: frames under ``energy_gate_dbfs`` (digital silence,
-a muted mic), and frames within ``noise_margin_db`` of the channel's tracked noise floor
-(steady room tone or fan noise), are scored 0 without calling the detector. Silence then
+a muted mic), and, between utterances, frames within ``noise_margin_db`` of the channel's
+tracked noise floor (steady room tone or fan noise), are scored 0 without calling the
+detector. Silence then
 costs a few numpy ops per frame and never produces a segment.
 """
 
@@ -166,6 +167,10 @@ class Segmenter:
             self._floor_db = db
         else:
             self._floor_db = min(db, self._floor_db + self._s.noise_floor_rise_db)
+        if self.speaking:
+            # inside an utterance only the absolute gate applies: soft syllables near the
+            # noise floor go to the VAD, so they neither split the sentence nor get lost
+            return db < self._gate_db
         return db < self._gate_db or db < self._floor_db + margin
 
     def _step(self, t: datetime, frame: Pcm) -> list[Segment]:
