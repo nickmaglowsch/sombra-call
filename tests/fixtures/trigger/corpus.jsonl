@@ -1,0 +1,205 @@
+{"id": "p01", "split": "dev", "kind": "positive", "lines": ["[09:32:00] OUTROS: Nick, o que você acha de fechar a release na sexta?"], "trigger": true, "needs_screen": false}
+{"id": "p02", "split": "dev", "kind": "positive", "lines": ["[09:34:00] EU: bom dia pessoal", "[09:34:03] OUTROS: Bom dia. Nick, como tá o ticket de login?"], "trigger": true}
+{"id": "p03", "split": "dev", "kind": "positive", "lines": ["[09:36:00] OUTROS: Beleza, então vamos pro próximo. Nick, consegue dar um update do checkout?"], "trigger": true}
+{"id": "p04", "split": "dev", "kind": "positive", "lines": ["[09:38:00] OUTROS: E aí Nick, alguma novidade do deploy?"], "trigger": true}
+{"id": "p05", "split": "dev", "kind": "positive", "lines": ["[09:40:00] OUTROS: Tá, e a migração do banco, Nick?"], "trigger": true}
+{"id": "p06", "split": "dev", "kind": "positive", "lines": ["[09:42:00] OUTROS: Nick, você pode explicar rapidinho por que a gente trocou o Redis?"], "trigger": true}
+{"id": "p07", "split": "dev", "kind": "positive", "lines": ["[09:44:00] OUTROS: Nick, fala um pouco sobre o que você fez ontem."], "trigger": true}
+{"id": "p08", "split": "dev", "kind": "positive", "lines": ["[09:46:00] OUTROS: Nick, me diz uma coisa, o endpoint novo já tá em produção?"], "trigger": true}
+{"id": "p09", "split": "dev", "kind": "positive", "lines": ["[09:48:00] OUTROS: Nick, quando você acha que dá pra entregar isso?"], "trigger": true}
+{"id": "p10", "split": "dev", "kind": "positive", "lines": ["[09:50:00] OUTROS: Qual é a estimativa pra essa história, Nick?"], "trigger": true}
+{"id": "p11", "split": "dev", "kind": "positive", "lines": ["[09:52:00] OUTROS: Nick, quem tá revisando o PR do pagamento?"], "trigger": true}
+{"id": "p12", "split": "dev", "kind": "positive", "lines": ["[09:54:00] OUTROS: Nick, tem como você olhar esse bug hoje ainda?"], "trigger": true}
+{"id": "p13", "split": "dev", "kind": "positive", "lines": ["[09:56:00] OUTROS: O que vocês acham? Nick, você concorda?"], "trigger": true}
+{"id": "p14", "split": "dev", "kind": "positive", "lines": ["[09:58:00] OUTROS: Nick, conta pra gente como foi a reunião com o cliente."], "trigger": true}
+{"id": "p15", "split": "dev", "kind": "positive", "lines": ["[10:00:00] OUTROS: Nick você acha que precisa de mais uma sprint pra isso"], "trigger": true}
+{"id": "p16", "split": "dev", "kind": "positive", "lines": ["[10:02:00] OUTROS: Nick pode compartilhar a tela"], "trigger": true}
+{"id": "p17", "split": "dev", "kind": "positive", "lines": ["[10:04:00] OUTROS: Mas Nick, se a gente cortar esse escopo, o que sobra pro MVP?"], "trigger": true}
+{"id": "p18", "split": "dev", "kind": "positive", "lines": ["[10:06:00] OUTROS: Então Nick, dá pra subir isso antes da demo?"], "trigger": true}
+{"id": "p19", "split": "dev", "kind": "positive", "lines": ["[10:08:00] OUTROS: Ô Nick, você lembra qual foi o motivo do rollback?"], "trigger": true}
+{"id": "p20", "split": "dev", "kind": "positive", "lines": ["[10:10:00] OUTROS: Nick, por que o teste de integração tá quebrando?"], "trigger": true}
+{"id": "p21", "split": "dev", "kind": "positive", "lines": ["[10:12:00] OUTROS: Deixa eu ver se entendi, Nick, a ideia é mandar o evento direto pra fila?"], "trigger": true}
+{"id": "p22", "split": "dev", "kind": "positive", "lines": ["[10:14:00] OUTROS: Nick, qual a sua opinião sobre usar feature flag aqui?"], "trigger": true}
+{"id": "p23", "split": "dev", "kind": "positive", "lines": ["[10:16:00] OUTROS: E o custo da infra, Nick? Você chegou a calcular?"], "trigger": true}
+{"id": "p24", "split": "dev", "kind": "positive", "lines": ["[10:18:00] OUTROS: Nick, consegue confirmar se o cliente aprovou o layout?"], "trigger": true}
+{"id": "p25", "split": "dev", "kind": "positive", "lines": ["[10:20:00] OUTROS: Nicolas, você tá com o card de notificações ainda?"], "trigger": true}
+{"id": "p26", "split": "dev", "kind": "positive", "lines": ["[10:22:00] OUTROS: Bom, Nick, como a gente faz com o bug do iOS?"], "trigger": true}
+{"id": "p27", "split": "dev", "kind": "positive", "lines": ["[10:24:00] OUTROS: Nick, só pra confirmar, a API vai continuar versionada?"], "trigger": true}
+{"id": "p28", "split": "dev", "kind": "positive", "lines": ["[10:26:00] OUTROS: você acha que vale a pena, Nick?"], "trigger": true}
+{"id": "p29", "split": "dev", "kind": "positive", "lines": ["[10:28:00] OUTROS: Nick e Marina, o que vocês acham dessa proposta?"], "trigger": true}
+{"id": "p30", "split": "dev", "kind": "positive", "lines": ["[10:30:00] OUTROS: Nick, a gente vai conseguir manter a data?"], "trigger": true}
+{"id": "m01", "split": "dev", "kind": "misspelling", "lines": ["[10:32:00] OUTROS: Nik, o que você acha de fechar na sexta?"], "trigger": true}
+{"id": "m02", "split": "dev", "kind": "misspelling", "lines": ["[10:34:00] OUTROS: Nic, você pode dar o status do onboarding?"], "trigger": true}
+{"id": "m03", "split": "dev", "kind": "misspelling", "lines": ["[10:36:00] OUTROS: Nique, tem alguma coisa bloqueando você?"], "trigger": true}
+{"id": "m04", "split": "dev", "kind": "misspelling", "lines": ["[10:38:00] OUTROS: E aí, Nicky, como ficou a parte de pagamentos?"], "trigger": true}
+{"id": "m05", "split": "dev", "kind": "misspelling", "lines": ["[10:40:00] OUTROS: Niki, você chegou a falar com o time de dados?"], "trigger": true}
+{"id": "m06", "split": "dev", "kind": "misspelling", "lines": ["[10:42:00] OUTROS: Nicke, consegue explicar esse fluxo de novo?"], "trigger": true}
+{"id": "m07", "split": "dev", "kind": "misspelling", "lines": ["[10:44:00] OUTROS: Nicholas, qual é o prazo que você deu pro cliente?"], "trigger": true}
+{"id": "m08", "split": "dev", "kind": "misspelling", "lines": ["[10:46:00] OUTROS: E aí Nick. Tudo certo com o deploy de ontem?"], "trigger": true}
+{"id": "m09", "split": "dev", "kind": "misspelling", "lines": ["[10:48:00] OUTROS: e o relatório, nik?"], "trigger": true}
+{"id": "m10", "split": "dev", "kind": "misspelling", "lines": ["[10:50:00] OUTROS: Tiago, você consegue pegar essa tarefa?"], "trigger": true, "name": "Thiago", "aliases": ["Thi"]}
+{"id": "m11", "split": "dev", "kind": "misspelling", "lines": ["[10:52:00] OUTROS: Thi, o que acha de a gente adiar?"], "trigger": true, "name": "Thiago", "aliases": ["Thi"]}
+{"id": "m12", "split": "dev", "kind": "misspelling", "lines": ["[10:54:00] OUTROS: Rafaell, como tá o front da tela de cadastro?"], "trigger": true, "name": "Rafael", "aliases": ["Rafa"]}
+{"id": "m13", "split": "dev", "kind": "misspelling", "lines": ["[10:56:00] OUTROS: Ana Paula, você pode revisar o contrato hoje?"], "trigger": true, "name": "Ana Paula", "aliases": ["Aninha"]}
+{"id": "m14", "split": "dev", "kind": "misspelling", "lines": ["[10:58:00] OUTROS: Aninha, quando sai a pesquisa com os usuários?"], "trigger": true, "name": "Ana Paula", "aliases": ["Aninha"]}
+{"id": "s01", "split": "dev", "kind": "split", "lines": ["[11:00:00] OUTROS: Nick...", "[11:00:02] OUTROS: o que você acha dessa abordagem com cache?"], "trigger": true}
+{"id": "s02", "split": "dev", "kind": "split", "lines": ["[11:02:00] OUTROS: Nick.", "[11:02:01] EU: oi", "[11:02:03] OUTROS: Você conseguiu falar com o pessoal do jurídico?"], "trigger": true}
+{"id": "s03", "split": "dev", "kind": "split", "lines": ["[11:04:00] OUTROS: E você, o que acha?", "[11:04:01] OUTROS: Nick?"], "trigger": true}
+{"id": "s04", "split": "dev", "kind": "split", "lines": ["[11:06:00] OUTROS: Nick, só uma coisa", "[11:06:03] OUTROS: dá pra você mandar o link da documentação depois?"], "trigger": true}
+{"id": "s05", "split": "dev", "kind": "split", "lines": ["[11:08:00] OUTROS: Então,", "[11:08:01] OUTROS: Nick,", "[11:08:03] OUTROS: qual é o plano pro próximo sprint?"], "trigger": true}
+{"id": "s06", "split": "dev", "kind": "split", "lines": ["[11:10:00] OUTROS: Quanto tempo você acha que leva pra fazer a integração?", "[11:10:02] OUTROS: Né, Nick?"], "trigger": true}
+{"id": "s07", "split": "dev", "kind": "split", "lines": ["[11:12:00] OUTROS: Nique,", "[11:12:04] OUTROS: você tá acompanhando o incidente?"], "trigger": true}
+{"id": "s08", "split": "dev", "kind": "split", "lines": ["[11:14:00] OUTROS: Nick...", "[11:14:12] OUTROS: alguém sabe onde tá a planilha de custos?"], "trigger": false, "note": "gap too long"}
+{"id": "s09", "split": "dev", "kind": "split", "lines": ["[11:16:00] OUTROS: Nick", "[11:16:02] OUTROS: Maria, você pode me mandar o relatório?"], "trigger": false, "note": "question addressed to Maria"}
+{"id": "s10", "split": "dev", "kind": "split", "lines": ["[11:18:00] OUTROS: Isso eu falei com o Nick.", "[11:18:02] OUTROS: O que vocês acham?"], "trigger": false, "note": "name is a reference"}
+{"id": "n01", "split": "dev", "kind": "name_only", "lines": ["[11:20:00] OUTROS: Falei com o Nick ontem sobre isso."], "trigger": false}
+{"id": "n02", "split": "dev", "kind": "name_only", "lines": ["[11:22:00] OUTROS: O Nick tá cuidando da parte de pagamentos."], "trigger": false}
+{"id": "n03", "split": "dev", "kind": "name_only", "lines": ["[11:24:00] OUTROS: Isso aí foi o Nick que fez, ficou muito bom."], "trigger": false}
+{"id": "n04", "split": "dev", "kind": "name_only", "lines": ["[11:26:00] OUTROS: Valeu, Nick."], "trigger": false}
+{"id": "n05", "split": "dev", "kind": "name_only", "lines": ["[11:28:00] OUTROS: Obrigado Nick, ajudou bastante."], "trigger": false}
+{"id": "n06", "split": "dev", "kind": "name_only", "lines": ["[11:30:00] OUTROS: Nick falou que o deploy tá marcado pra quinta."], "trigger": false}
+{"id": "n07", "split": "dev", "kind": "name_only", "lines": ["[11:32:00] OUTROS: Pede pro Nick subir a versão nova."], "trigger": false}
+{"id": "n08", "split": "dev", "kind": "name_only", "lines": ["[11:34:00] OUTROS: A gente combinou com o Nick de revisar amanhã."], "trigger": false}
+{"id": "n09", "split": "dev", "kind": "name_only", "lines": ["[11:36:00] OUTROS: Nick, bom trabalho na demo."], "trigger": false}
+{"id": "n10", "split": "dev", "kind": "name_only", "lines": ["[11:38:00] OUTROS: Segundo o Nick a API aguenta o pico."], "trigger": false}
+{"id": "n11", "split": "dev", "kind": "name_only", "lines": ["[11:40:00] OUTROS: Nick fez o deploy ontem à noite."], "trigger": false}
+{"id": "n12", "split": "dev", "kind": "name_only", "lines": ["[11:42:00] OUTROS: Tá bom, Nick, valeu."], "trigger": false}
+{"id": "n13", "split": "dev", "kind": "name_only", "lines": ["[11:44:00] OUTROS: Eu e o Nick vamos pairar nisso à tarde."], "trigger": false}
+{"id": "n14", "split": "dev", "kind": "name_only", "lines": ["[11:46:00] OUTROS: Nick"], "trigger": false}
+{"id": "q01", "split": "dev", "kind": "near_miss", "lines": ["[11:48:00] OUTROS: O Nick já fez o merge daquele PR?"], "trigger": false, "note": "question about Nick to others"}
+{"id": "q02", "split": "dev", "kind": "near_miss", "lines": ["[11:50:00] OUTROS: Alguém sabe se o Nick vai estar na planning?"], "trigger": false}
+{"id": "q03", "split": "dev", "kind": "near_miss", "lines": ["[11:52:00] OUTROS: Marina, você pode perguntar pro Nick depois?"], "trigger": false}
+{"id": "q04", "split": "dev", "kind": "near_miss", "lines": ["[11:54:00] OUTROS: Cadê o Nick? Ele não entrou ainda?"], "trigger": false}
+{"id": "q05", "split": "dev", "kind": "near_miss", "lines": ["[11:56:00] OUTROS: Qual é o nick do bot no Slack?"], "trigger": false}
+{"id": "q06", "split": "dev", "kind": "near_miss", "lines": ["[11:58:00] OUTROS: Vocês viram o que o Nick mandou no canal?"], "trigger": false}
+{"id": "q07", "split": "dev", "kind": "near_miss", "lines": ["[12:00:00] OUTROS: Quem vai cobrir o Nick nas férias?"], "trigger": false}
+{"id": "q08", "split": "dev", "kind": "near_miss", "lines": ["[12:02:00] OUTROS: Nick vai apresentar primeiro ou a Marina?"], "trigger": false}
+{"id": "q09", "split": "dev", "kind": "near_miss", "lines": ["[12:04:00] OUTROS: Marina, o que você acha da proposta do Nick?"], "trigger": false}
+{"id": "q10", "split": "dev", "kind": "near_miss", "lines": ["[12:06:00] OUTROS: Alguém pode compartilhar a tela?"], "trigger": false, "note": "nobody named"}
+{"id": "q11", "split": "dev", "kind": "near_miss", "lines": ["[12:08:00] OUTROS: O que vocês acham de fechar na sexta?"], "trigger": false}
+{"id": "q12", "split": "dev", "kind": "near_miss", "lines": ["[12:10:00] OUTROS: Tá, e o deploy, Marina?"], "trigger": false}
+{"id": "q13", "split": "dev", "kind": "near_miss", "lines": ["[12:12:00] OUTROS: Pedro, como tá o ticket do login?"], "trigger": false}
+{"id": "q14", "split": "dev", "kind": "near_miss", "lines": ["[12:14:00] OUTROS: Isso é nítido, dá pra ver no gráfico?"], "trigger": false, "note": "similar lowercase word"}
+{"id": "q15", "split": "dev", "kind": "near_miss", "lines": ["[12:16:00] OUTROS: Você viu o Nike novo que lançaram?"], "trigger": false}
+{"id": "q16", "split": "dev", "kind": "near_miss", "lines": ["[12:18:00] OUTROS: A Thiara pode revisar isso?"], "trigger": false, "name": "Thiago", "aliases": ["Thi"]}
+{"id": "h01", "split": "dev", "kind": "phatic", "lines": ["[12:20:00] OUTROS: Nick, tudo bem?"], "trigger": false}
+{"id": "h02", "split": "dev", "kind": "phatic", "lines": ["[12:22:00] OUTROS: Oi Nick, tá me ouvindo?"], "trigger": false}
+{"id": "h03", "split": "dev", "kind": "phatic", "lines": ["[12:24:00] OUTROS: Bom dia, Nick! Tudo certo?"], "trigger": false}
+{"id": "e01", "split": "dev", "kind": "eu", "lines": ["[12:26:00] EU: Nick, o que você acha disso?"], "trigger": false}
+{"id": "e02", "split": "dev", "kind": "eu", "lines": ["[12:28:00] EU: Eu sou o Nick, qual é a dúvida?"], "trigger": false}
+{"id": "e03", "split": "dev", "kind": "eu", "lines": ["[12:30:00] EU: Nick falando, alguém tem pergunta?"], "trigger": false}
+{"id": "e04", "split": "dev", "kind": "eu", "lines": ["[12:32:00] OUTROS: Então fica combinado.", "[12:32:02] EU: Nick aqui, posso compartilhar a tela?"], "trigger": false}
+{"id": "x01", "split": "dev", "kind": "mixed", "lines": ["[12:34:00] OUTROS: Nick, what do you think about the rollout plan?"], "trigger": true}
+{"id": "x02", "split": "dev", "kind": "mixed", "lines": ["[12:36:00] OUTROS: Nick, você pode fazer um quick sync com o time de design?"], "trigger": true}
+{"id": "x03", "split": "dev", "kind": "mixed", "lines": ["[12:38:00] OUTROS: Can you walk us through the dashboard, Nick?"], "trigger": true}
+{"id": "x04", "split": "dev", "kind": "mixed", "lines": ["[12:40:00] OUTROS: Nick, o deadline é sexta, can you make it?"], "trigger": true}
+{"id": "x05", "split": "dev", "kind": "mixed", "lines": ["[12:42:00] OUTROS: I'll sync with Nick after the call."], "trigger": false}
+{"id": "x06", "split": "dev", "kind": "mixed", "lines": ["[12:44:00] OUTROS: Thanks Nick, that was great."], "trigger": false}
+{"id": "d01", "split": "dev", "kind": "deictic", "lines": ["[12:46:00] TELA f0001 \"Zoom - Roadmap Q4\"", "[12:46:05] TELA f0002 \"Zoom - Roadmap Q4\"", "[12:46:10] TELA f0003 \"Google Sheets - Custos\"", "[12:46:13] OUTROS: Nick, o que você acha desse gráfico?"], "trigger": true, "needs_screen": true, "frames": ["f0003", "f0002", "f0001"]}
+{"id": "d02", "split": "dev", "kind": "deictic", "lines": ["[12:48:00] TELA f0012 \"Figma - Checkout\"", "[12:48:04] OUTROS: Nick, tá vendo aqui esse botão? Faz sentido pra você?"], "trigger": true, "needs_screen": true, "frames": ["f0012"]}
+{"id": "d03", "split": "dev", "kind": "deictic", "lines": ["[12:50:00] TELA f0020 \"Jira - Sprint 42\"", "[12:50:06] TELA f0021 \"Grafana - Latência\"", "[12:50:08] OUTROS: E esse pico aqui, Nick, você sabe o que foi?"], "trigger": true, "needs_screen": true, "frames": ["f0021", "f0020"]}
+{"id": "d04", "split": "dev", "kind": "deictic", "lines": ["[12:52:00] TELA f0004 \"Slides - Demo\"", "[12:52:05] TELA f0005 \"Slides - Demo\"", "[12:52:10] TELA f0006 \"Slides - Demo\"", "[12:52:15] TELA f0007 \"Slides - Demo\"", "[12:52:17] OUTROS: Nick, esse slide tá claro ou você mudaria alguma coisa?"], "trigger": true, "needs_screen": true, "frames": ["f0007", "f0006", "f0005"]}
+{"id": "d05", "split": "dev", "kind": "deictic", "lines": ["[12:54:00] TELA f0030 \"Sheets - Orçamento\"", "[12:54:03] TELA f0031 \"Sheets - Orçamento\"", "[12:54:06] TELA f0030 \"Sheets - Orçamento\"", "[12:54:08] OUTROS: Nick, essa planilha bate com o que você passou?"], "trigger": true, "needs_screen": true, "frames": ["f0030", "f0031"]}
+{"id": "d06", "split": "dev", "kind": "deictic", "lines": ["[12:56:00] TELA f0040 \"Zoom\"", "[12:56:04] OUTROS: Nick, você lembra o que ficou decidido na reunião de ontem?"], "trigger": true, "needs_screen": false, "frames": []}
+{"id": "d07", "split": "dev", "kind": "deictic", "lines": ["[12:58:00] OUTROS: Nick, nessa tela que eu tô compartilhando, dá pra ver o erro?"], "trigger": true, "needs_screen": true, "frames": []}
+{"id": "d08", "split": "dev", "kind": "deictic", "lines": ["[13:00:00] TELA f0050 \"Chrome - Admin\"", "[13:00:02] OUTROS: Nick, olha isso: o número de pedidos caiu?"], "trigger": true, "needs_screen": true}
+{"id": "d09", "split": "dev", "kind": "deictic", "lines": ["[13:02:00] TELA f0060 \"Zoom - Roadmap\"", "[13:02:02] OUTROS: Esse gráfico aqui mostra a queda de conversão."], "trigger": false}
+{"id": "d10", "split": "dev", "kind": "deictic", "lines": ["[13:04:00] TELA f0070 \"Metabase - Funil\"", "[13:04:03] OUTROS: Nick", "[13:04:05] OUTROS: esse número aqui, de onde vem?"], "trigger": true, "needs_screen": true}
+{"id": "c01", "split": "dev", "kind": "cooldown", "lines": ["[13:06:00] OUTROS: Nick, você pode revisar o PR?", "[13:06:05] OUTROS: Nick, você pode revisar o PR?"], "trigger": true, "note": "only the first counts; must still fire"}
+{"id": "w01", "split": "dev", "kind": "window", "lines": ["[13:08:00] OUTROS: Vamos começar pela parte de pagamentos.", "[13:08:20] OUTROS: Hoje a gente teve três incidentes.", "[13:08:50] OUTROS: Nick, você acha que dá pra investigar hoje?"], "trigger": true}
+{"id": "p31", "split": "dev", "kind": "positive", "lines": ["[13:10:00] OUTROS: Nick, você viu que o deploy quebrou?"], "trigger": true}
+{"id": "p32", "split": "dev", "kind": "positive", "lines": ["[13:12:00] OUTROS: Nick, o Pedro quer saber se dá pra adiantar a entrega."], "trigger": true}
+{"id": "p33", "split": "dev", "kind": "handoff", "lines": ["[13:14:00] OUTROS: Beleza, Marina. Nick, sua vez."], "trigger": true}
+{"id": "p34", "split": "dev", "kind": "handoff", "lines": ["[13:16:00] OUTROS: Nick, e aí?"], "trigger": true}
+{"id": "p35", "split": "dev", "kind": "handoff", "lines": ["[13:18:00] OUTROS: Agora contigo, Nick."], "trigger": true}
+{"id": "n15", "split": "dev", "kind": "name_only", "lines": ["[13:20:00] OUTROS: Nick, só pra você saber, o cliente ligou."], "trigger": false}
+{"id": "n16", "split": "dev", "kind": "name_only", "lines": ["[13:22:00] OUTROS: Nick, lembra de mandar o relatório."], "trigger": false}
+{"id": "n17", "split": "dev", "kind": "name_only", "lines": ["[13:24:00] OUTROS: Pergunta pro Nick, ele sabe."], "trigger": false}
+{"id": "n18", "split": "dev", "kind": "name_only", "lines": ["[13:26:00] OUTROS: Tá, Nick."], "trigger": false}
+{"id": "n19", "split": "dev", "kind": "name_only", "lines": ["[13:28:00] OUTROS: Nick eu acho que a gente devia adiar"], "trigger": false}
+{"id": "q17", "split": "dev", "kind": "near_miss", "lines": ["[13:30:00] OUTROS: Marina, depois você e o Nick alinham isso?"], "trigger": false}
+{"id": "q18", "split": "dev", "kind": "near_miss", "lines": ["[13:32:00] OUTROS: Nick, você tem razão."], "trigger": false, "note": "statement to the user"}
+{"id": "s11", "split": "dev", "kind": "split", "lines": ["[13:34:00] OUTROS: Nick,", "[13:34:01] TELA f0081 \"Sentry - Erros\"", "[13:34:03] OUTROS: tá vendo esse erro?"], "trigger": true, "needs_screen": true, "frames": ["f0081"]}
+{"id": "t01", "split": "dev", "kind": "near_miss", "lines": ["[13:36:00] OUTROS: Nick tá de férias, né?"], "trigger": false, "note": "statement about the user with a tag question"}
+{"id": "t02", "split": "dev", "kind": "near_miss", "lines": ["[13:38:00] OUTROS: Nick fechou com o cliente, não foi?"], "trigger": false, "note": "statement about the user with a tag question"}
+{"id": "t03", "split": "dev", "kind": "near_miss", "lines": ["[13:40:00] OUTROS: Nick também acha isso, né?"], "trigger": false, "note": "statement about the user with a tag question"}
+{"id": "t04", "split": "dev", "kind": "positive", "lines": ["[13:42:00] OUTROS: Nick, tá de férias?"], "trigger": true, "note": "comma makes it a vocative, pro-drop second person"}
+{"id": "t05", "split": "dev", "kind": "positive", "lines": ["[13:44:00] OUTROS: Nick, fechou com o cliente?"], "trigger": true}
+{"id": "t06", "split": "dev", "kind": "near_miss", "lines": ["[13:46:00] OUTROS: Nicolas Cage fez aquele filme, lembra?"], "trigger": false, "note": "namesake"}
+{"id": "w02", "split": "dev", "kind": "whisper", "lines": ["[13:48:00] OUTROS: nick você já testou isso em produção"], "trigger": true, "note": "no punctuation"}
+{"id": "w03", "split": "dev", "kind": "whisper", "lines": ["[13:50:00] OUTROS: e aí nick tudo certo com a migração do banco já dá pra rodar"], "trigger": true}
+{"id": "w04", "split": "dev", "kind": "whisper", "lines": ["[13:52:00] OUTROS: nick consegue me mandar o link depois da call"], "trigger": true}
+{"id": "w05", "split": "dev", "kind": "whisper", "lines": ["[13:54:00] OUTROS: aí o nick falou que ia ver isso amanhã"], "trigger": false}
+{"id": "w06", "split": "dev", "kind": "whisper", "lines": ["[13:56:00] OUTROS: nick entrou atrasado de novo né"], "trigger": false}
+{"id": "w07", "split": "dev", "kind": "whisper", "lines": ["[13:58:00] OUTROS: E aí Nick tá tudo certo com o deploy?"], "trigger": true, "note": "pro-drop second person, comma dropped"}
+{"id": "w08", "split": "dev", "kind": "whisper", "lines": ["[14:00:00] OUTROS: nick você tem razão"], "trigger": false, "note": "praise without a comma; no dropped question"}
+{"id": "hp01", "split": "holdout", "kind": "positive", "lines": ["[14:02:00] OUTROS: Nick, e aquela história do cache, andou?"], "trigger": true}
+{"id": "hp02", "split": "holdout", "kind": "positive", "lines": ["[14:04:00] OUTROS: Pessoal, antes de fechar: Nick, tem algum impedimento?"], "trigger": true}
+{"id": "hp03", "split": "holdout", "kind": "positive", "lines": ["[14:06:00] OUTROS: Nick, sobre o contrato com a Stone, o que ficou acertado?"], "trigger": true}
+{"id": "hp04", "split": "holdout", "kind": "positive", "lines": ["[14:08:00] OUTROS: Faz sentido pra você, Nick?"], "trigger": true}
+{"id": "hp05", "split": "holdout", "kind": "positive", "lines": ["[14:10:00] OUTROS: Nick, explica pro pessoal novo como funciona o pipeline."], "trigger": true}
+{"id": "hp06", "split": "holdout", "kind": "positive", "lines": ["[14:12:00] OUTROS: Nick, você poderia assumir a apresentação na quinta?"], "trigger": true}
+{"id": "hp07", "split": "holdout", "kind": "positive", "lines": ["[14:14:00] OUTROS: Legal. E do seu lado, Nick, como tá?"], "trigger": true}
+{"id": "hp08", "split": "holdout", "kind": "positive", "lines": ["[14:16:00] OUTROS: Nick, a gente precisa de uma resposta até amanhã, consegue?"], "trigger": true}
+{"id": "hp09", "split": "holdout", "kind": "positive", "lines": ["[14:18:00] OUTROS: Tá, mas Nick, quanto isso impacta no prazo?"], "trigger": true}
+{"id": "hp10", "split": "holdout", "kind": "positive", "lines": ["[14:20:00] OUTROS: Nick, onde que tá a documentação do webhook?"], "trigger": true}
+{"id": "hp11", "split": "holdout", "kind": "positive", "lines": ["[14:22:00] OUTROS: Nick, comenta aí o que você achou do novo fluxo."], "trigger": true}
+{"id": "hp12", "split": "holdout", "kind": "positive", "lines": ["[14:24:00] OUTROS: Nicolas, será que dá pra priorizar o bug do boleto?"], "trigger": true}
+{"id": "hp13", "split": "holdout", "kind": "positive", "lines": ["[14:26:00] OUTROS: Nick o time de dados pode usar esse endpoint"], "trigger": true}
+{"id": "hp14", "split": "holdout", "kind": "positive", "lines": ["[14:28:00] OUTROS: E aí, Nick, bora fechar o escopo? O que entra e o que sai?"], "trigger": true}
+{"id": "hp15", "split": "holdout", "kind": "positive", "lines": ["[14:30:00] OUTROS: Nick, resume pra gente os pontos da retro."], "trigger": true}
+{"id": "hm01", "split": "holdout", "kind": "misspelling", "lines": ["[14:32:00] OUTROS: Nik, consegue me passar o acesso ao bucket?"], "trigger": true}
+{"id": "hm02", "split": "holdout", "kind": "misspelling", "lines": ["[14:34:00] OUTROS: Nique, qual foi o resultado do teste A/B?"], "trigger": true}
+{"id": "hm03", "split": "holdout", "kind": "misspelling", "lines": ["[14:36:00] OUTROS: Nic, você tá com o card de exportação?"], "trigger": true}
+{"id": "hm04", "split": "holdout", "kind": "misspelling", "lines": ["[14:38:00] OUTROS: E aí, Nicky, o que você achou da demo?"], "trigger": true}
+{"id": "hm05", "split": "holdout", "kind": "misspelling", "lines": ["[14:40:00] OUTROS: Tiago, como ficou a conversa com o fornecedor?"], "trigger": true, "name": "Thiago", "aliases": ["Thi"]}
+{"id": "hm06", "split": "holdout", "kind": "misspelling", "lines": ["[14:42:00] OUTROS: Rafa, você consegue validar isso com o jurídico?"], "trigger": true, "name": "Rafael", "aliases": ["Rafa"]}
+{"id": "hm07", "split": "holdout", "kind": "misspelling", "lines": ["[14:44:00] OUTROS: Nikolas, quando você volta das férias?"], "trigger": true}
+{"id": "hs01", "split": "holdout", "kind": "split", "lines": ["[14:46:00] OUTROS: Nick,", "[14:46:03] OUTROS: você tem cinco minutos depois da daily?"], "trigger": true}
+{"id": "hs02", "split": "holdout", "kind": "split", "lines": ["[14:48:00] OUTROS: Uma pergunta rápida.", "[14:48:01] OUTROS: Nick.", "[14:48:03] OUTROS: Qual versão do Node a gente tá usando no build?"], "trigger": true}
+{"id": "hs03", "split": "holdout", "kind": "split", "lines": ["[14:50:00] OUTROS: Isso já foi pro cliente?", "[14:50:02] OUTROS: Nick?"], "trigger": true}
+{"id": "hs04", "split": "holdout", "kind": "split", "lines": ["[14:52:00] OUTROS: Nick...", "[14:52:15] OUTROS: próximo ponto, quem cuida da retro?"], "trigger": false}
+{"id": "hs05", "split": "holdout", "kind": "split", "lines": ["[14:54:00] OUTROS: Nick", "[14:54:02] OUTROS: Pessoal, o que vocês acham de adiar a demo?"], "trigger": false}
+{"id": "hn01", "split": "holdout", "kind": "name_only", "lines": ["[14:56:00] OUTROS: O Nick comentou isso na daily."], "trigger": false}
+{"id": "hn02", "split": "holdout", "kind": "name_only", "lines": ["[14:58:00] OUTROS: Manda pro Nick que ele resolve."], "trigger": false}
+{"id": "hn03", "split": "holdout", "kind": "name_only", "lines": ["[15:00:00] OUTROS: Nick disse que precisa de mais uma semana."], "trigger": false}
+{"id": "hn04", "split": "holdout", "kind": "name_only", "lines": ["[15:02:00] OUTROS: Brigado, Nick!"], "trigger": false}
+{"id": "hn05", "split": "holdout", "kind": "name_only", "lines": ["[15:04:00] OUTROS: Tô com o Nick e a Carla nessa frente."], "trigger": false}
+{"id": "hn06", "split": "holdout", "kind": "name_only", "lines": ["[15:06:00] OUTROS: Nick, parabéns pela entrega."], "trigger": false}
+{"id": "hn07", "split": "holdout", "kind": "name_only", "lines": ["[15:08:00] OUTROS: Aquele dashboard do Nick tá desatualizado."], "trigger": false}
+{"id": "hq01", "split": "holdout", "kind": "near_miss", "lines": ["[15:10:00] OUTROS: O Nick aprovou o orçamento?"], "trigger": false}
+{"id": "hq02", "split": "holdout", "kind": "near_miss", "lines": ["[15:12:00] OUTROS: Carla, você falou com o Nick sobre o prazo?"], "trigger": false}
+{"id": "hq03", "split": "holdout", "kind": "near_miss", "lines": ["[15:14:00] OUTROS: Alguém lembra o que o Nick decidiu?"], "trigger": false}
+{"id": "hq04", "split": "holdout", "kind": "near_miss", "lines": ["[15:16:00] OUTROS: Vocês acham que o Nick topa?"], "trigger": false}
+{"id": "hq05", "split": "holdout", "kind": "near_miss", "lines": ["[15:18:00] OUTROS: Nick tinha falado alguma coisa sobre isso?"], "trigger": false}
+{"id": "hq06", "split": "holdout", "kind": "near_miss", "lines": ["[15:20:00] OUTROS: Qual o prazo, Carla?"], "trigger": false}
+{"id": "hq07", "split": "holdout", "kind": "near_miss", "lines": ["[15:22:00] OUTROS: Alguém consegue explicar esse fluxo?"], "trigger": false}
+{"id": "hh01", "split": "holdout", "kind": "phatic", "lines": ["[15:24:00] OUTROS: Nick, tá aí?"], "trigger": false}
+{"id": "hh02", "split": "holdout", "kind": "phatic", "lines": ["[15:26:00] OUTROS: E aí Nick, beleza?"], "trigger": false}
+{"id": "he01", "split": "holdout", "kind": "eu", "lines": ["[15:28:00] EU: Nick aqui, vocês me ouvem?"], "trigger": false}
+{"id": "he02", "split": "holdout", "kind": "eu", "lines": ["[15:30:00] EU: Pessoal, o Nick vai explicar isso, né? Eu mesmo, no caso."], "trigger": false}
+{"id": "hx01", "split": "holdout", "kind": "mixed", "lines": ["[15:32:00] OUTROS: Nick, can you share the numbers?"], "trigger": true}
+{"id": "hx02", "split": "holdout", "kind": "mixed", "lines": ["[15:34:00] OUTROS: Nick, você tem o link do board? I can't find it."], "trigger": true}
+{"id": "hx03", "split": "holdout", "kind": "mixed", "lines": ["[15:36:00] OUTROS: Let's ask Nick later."], "trigger": false}
+{"id": "hd01", "split": "holdout", "kind": "deictic", "lines": ["[15:38:00] TELA f0101 \"Zoom - Planning\"", "[15:38:06] TELA f0102 \"Miro - Board\"", "[15:38:08] OUTROS: Nick, esse diagrama aqui tá atualizado?"], "trigger": true, "needs_screen": true, "frames": ["f0102", "f0101"]}
+{"id": "hd02", "split": "holdout", "kind": "deictic", "lines": ["[15:40:00] TELA f0110 \"Looker - Receita\"", "[15:40:03] OUTROS: Tá vendo essa queda, Nick? O que você acha que foi?"], "trigger": true, "needs_screen": true, "frames": ["f0110"]}
+{"id": "hd03", "split": "holdout", "kind": "deictic", "lines": ["[15:42:00] TELA f0120 \"Zoom\"", "[15:42:03] OUTROS: Nick, o que você achou da proposta que mandei por email?"], "trigger": true, "needs_screen": false}
+{"id": "hd04", "split": "holdout", "kind": "deictic", "lines": ["[15:44:00] TELA f0130 \"Slides\"", "[15:44:04] TELA f0131 \"Slides\"", "[15:44:08] TELA f0132 \"Slides\"", "[15:44:12] TELA f0133 \"Slides\"", "[15:44:14] OUTROS: Nick, essa tabela aqui, esses valores tão certos?"], "trigger": true, "needs_screen": true, "frames": ["f0133", "f0132", "f0131"]}
+{"id": "hm08", "split": "holdout", "kind": "misspelling", "lines": ["[15:46:00] OUTROS: Nico, você pode ver isso?"], "trigger": true, "note": "Whisper wrote Nico"}
+{"id": "hp16", "split": "holdout", "kind": "handoff", "lines": ["[15:48:00] OUTROS: Tá, obrigado Carla. E você, Nick?"], "trigger": true}
+{"id": "hp17", "split": "holdout", "kind": "handoff", "lines": ["[15:50:00] OUTROS: Nick, com você."], "trigger": true}
+{"id": "hp18", "split": "holdout", "kind": "positive", "lines": ["[15:52:00] OUTROS: E você, Nick, concorda com a Carla?"], "trigger": true}
+{"id": "hn08", "split": "holdout", "kind": "near_miss", "lines": ["[15:54:00] OUTROS: Nick, você manda muito bem nisso."], "trigger": false, "note": "statement to the user; \"manda\" read as a request verb"}
+{"id": "hn09", "split": "holdout", "kind": "name_only", "lines": ["[15:56:00] OUTROS: Beleza, então o Nick fecha isso."], "trigger": false}
+{"id": "hq08", "split": "holdout", "kind": "near_miss", "lines": ["[15:58:00] OUTROS: Nick, eu te mando o link depois."], "trigger": false}
+{"id": "ht01", "split": "holdout", "kind": "near_miss", "lines": ["[16:00:00] OUTROS: Nick sempre fala isso, né?"], "trigger": false, "note": "statement about the user with a tag question"}
+{"id": "ht02", "split": "holdout", "kind": "near_miss", "lines": ["[16:02:00] OUTROS: Nicolas já mandou o orçamento, não mandou?"], "trigger": false, "note": "statement about the user with a tag question"}
+{"id": "ht03", "split": "holdout", "kind": "near_miss", "lines": ["[16:04:00] OUTROS: Nick tava doente semana passada, né?"], "trigger": false, "note": "statement about the user with a tag question"}
+{"id": "ht04", "split": "holdout", "kind": "positive", "lines": ["[16:06:00] OUTROS: Nick, entregou tudo ontem?"], "trigger": true}
+{"id": "ht05", "split": "holdout", "kind": "near_miss", "lines": ["[16:08:00] OUTROS: Nicolas Silva, você pode falar?"], "trigger": false, "note": "another person's full name"}
+{"id": "hw01", "split": "holdout", "kind": "whisper", "lines": ["[16:10:00] OUTROS: nick o que que você acha da gente jogar isso pra próxima sprint"], "trigger": true, "note": "no punctuation"}
+{"id": "hw02", "split": "holdout", "kind": "whisper", "lines": ["[16:12:00] OUTROS: nik você viu o alerta do datadog"], "trigger": true}
+{"id": "hw03", "split": "holdout", "kind": "whisper", "lines": ["[16:14:00] OUTROS: o nik comentou que o build tá lento"], "trigger": false}
+{"id": "hw04", "split": "holdout", "kind": "whisper", "lines": ["[16:16:00] OUTROS: tá mas nick e o custo disso"], "trigger": true, "note": "no punctuation, no request word"}
+{"id": "hw05", "split": "holdout", "kind": "whisper", "lines": ["[16:18:00] OUTROS: Nick tá conseguindo ver minha tela?"], "trigger": true, "note": "pro-drop second person, comma dropped"}
+{"id": "hw06", "split": "holdout", "kind": "whisper", "lines": ["[16:20:00] OUTROS: Nick você manda muito bem"], "trigger": false, "note": "praise without a comma; no dropped question"}
