@@ -51,6 +51,24 @@ backend = "claude"                    # which agent answers: "claude" or "codex"
 - `claude` (default): Claude over the Messages API, with read-only tools on the meeting folder ([ADR 0009](adr/0009-claude-backend-and-cache-ttl.md)).
 - `codex`: the [Codex CLI](https://github.com/openai/codex) (`codex exec`), which must be on `PATH` (tested against `rust-v0.159.1`). It authenticates with the OpenAI key from the keychain, or with an existing `codex login`. Each answer runs under a Codex permission profile that can read only the meeting folder (plus the OS files a shell needs), write nothing and reach no network. Your `~/.codex/config.toml` is ignored for these runs. See [ADR 0018](adr/0018-codex-backend.md).
 
+#### Claude Code CLI (Claude Pro/Max subscription)
+
+`sombra.brain.claude_code.ClaudeCodeBrain` answers through your own installed and logged-in [Claude Code](https://code.claude.com/docs) CLI, so your Claude Pro or Max subscription pays for it instead of an API key. `sombra.summary.ClaudeCliTextModel` (and `CodexCliTextModel` for a ChatGPT plan via `codex login`) do the same for rolling summaries and minutes. The config keys that select them come with `sombra setup` (#47); this section describes what they do.
+
+What you need:
+
+- `claude` 2.1.285 or newer on `PATH` (`claude --version`; update with `claude update`). An older or unrecognised CLI is refused, because the confinement below depends on its flags.
+- A subscription login: run `claude` once and use `/login`. If Sombra reports "Claude Code is not logged in", do that again.
+- No API key. Sombra never passes `ANTHROPIC_API_KEY`, `ANTHROPIC_AUTH_TOKEN` or `ANTHROPIC_BASE_URL` to the CLI, even if they are set in your shell, because a key would move billing from the subscription to the API. Sombra never reads, copies or stores the CLI's login. `CLAUDE_CODE_OAUTH_TOKEN` (from `claude setup-token`) is not passed through either, so log in with `/login` rather than relying on that variable.
+
+What each answer does:
+
+- Runs `claude -p` in the meeting folder with only `Read`, `Grep` and `Glob`, confined to that folder (`--restricted`, `blockReadsOutsideWorkingDirectories`, `dontAsk`). There is no shell, no writing, no web, no MCP servers, no hooks, no skills or plugins from your settings, and your `~/.claude/settings.json` and any `CLAUDE.md` are not loaded.
+- Sends the prompt and any screenshots on stdin, starts a fresh session each time and saves no session history (`--no-session-persistence`), so screenshots never end up under `~/.claude`.
+- Uses your subscription's usage window. When the window or a rate limit is exhausted, the answer fails with a logged agent error and recording, transcription and screen capture carry on.
+
+Details and the reasoning are in [ADR 0046](adr/0046-claude-code-backend.md).
+
 ## Profiles
 
 A profile is a reusable set of context files and allowed topics, for example one per recurring meeting.
