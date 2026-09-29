@@ -98,7 +98,11 @@ def prompt_kit() -> PromptKit:
     except ImportError:
         return PromptKit(_system, _Prefix, _tail, _render)
     return PromptKit(
-        prompt.system_prompt, prompt.PrefixBuilder, prompt.build_tail, prompt.render_request
+        prompt.system_prompt,
+        prompt.PrefixBuilder,
+        prompt.build_tail,
+        prompt.render_request,
+        getattr(prompt, "parse_frame_request", None),
     )
 
 

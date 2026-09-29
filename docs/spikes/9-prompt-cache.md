@@ -50,11 +50,11 @@ How the offline model works: it applies the documented cache rules to the real r
 
 | Arm | Cache read | Cache write | Uncached in | Hit rate, answers 2–10 (all input) | Prefix hit rate, answers 2–10 | Cost / h (US$) | Images leak |
 |---|---|---|---|---|---|---|---|
-| messages-1h | 92,711 | 19,399 | 11,387 | 76% | 83% | 0.231 | no |
-| messages-5m | 34,863 | 77,247 | 11,387 | 28% | 31% | 0.451 | no |
-| messages-5m-keepalive | 155,393 | 19,399 | 11,408 | 76% | 83% | 0.186 | no |
+| messages-1h | 93,271 | 19,399 | 11,387 | 76% | 83% | 0.231 | no |
+| messages-5m | 35,087 | 77,583 | 11,387 | 28% | 31% | 0.452 | no |
+| messages-5m-keepalive | 156,345 | 19,399 | 11,408 | 76% | 83% | 0.186 | no |
 
-`claude-sonnet-5-5` ($2 / $2.50 / $4 / $0.20 / $10): 1h US$ 0.125/h, 5m US$ 0.229/h, 5m+keep-alive US$ 0.108/h, with the same token counts.
+`claude-sonnet-5-5` ($2 / $2.50 / $4 / $0.20 / $10): 1h US$ 0.125/h, 5m US$ 0.230/h, 5m+keep-alive US$ 0.109/h, with the same token counts.
 
 Per-trigger view for the 5-minute arm: triggers 2, 4, 5, 6, 8 and 10 follow gaps longer than 5 min and rewrite the whole prefix (4k → 20k tokens). The 1-hour arm writes only the transcript added since the previous trigger. "Hit rate (all input)" counts the uncached tail (question, last 60 s, up to 3.6k image tokens), which is why it is lower than the prefix hit rate.
 

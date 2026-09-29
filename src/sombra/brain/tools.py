@@ -41,6 +41,7 @@ class MeetingTools:
         max_read_chars: int = 40_000,
         max_matches: int = 200,
         max_glob_results: int = 500,
+        max_grep_bytes: int = 20_000_000,
     ) -> None:
         self.root = meeting_dir.resolve(strict=True)
         if not self.root.is_dir():
@@ -48,6 +49,7 @@ class MeetingTools:
         self.max_read_chars = max_read_chars
         self.max_matches = max_matches
         self.max_glob_results = max_glob_results
+        self.max_grep_bytes = max_grep_bytes
 
     # --- path confinement ------------------------------------------------------------
 
@@ -135,18 +137,25 @@ class MeetingTools:
         return "\n".join(out) if out else "(no lines in range)"
 
     def grep(
-        self, pattern: str, path: str = ".", glob: str | None = None, ignore_case: bool = False
+        self, pattern: str, path: str = ".", glob: str | None = None, ignore_case: bool = True
     ) -> str:
-        """Lines matching a regular expression, as ``path:line: text``."""
+        """Lines containing any of the ``|``-separated plain-text terms, as ``path:line: text``.
+
+        Deliberately not a regular expression: the model picks the pattern and reads
+        untrusted meeting text, so a regex would expose catastrophic backtracking
+        (ReDoS). Substring search is linear in the bytes scanned, which are capped.
+        """
         if len(pattern) > _MAX_PATTERN_CHARS:
             raise ToolError(f"pattern longer than {_MAX_PATTERN_CHARS} characters")
-        try:
-            regex = re.compile(pattern, re.IGNORECASE if ignore_case else 0)
-        except re.error as e:
-            raise ToolError(f"invalid regular expression: {e}") from None
+        terms = [t.strip() for t in pattern.split("|") if t.strip()]
+        if not terms:
+            raise ToolError("pattern must contain some text")
+        if ignore_case:
+            terms = [t.casefold() for t in terms]
         allowed = None if glob is None else set(self._glob_files(glob))
         start = self.resolve(path)
         hits: list[str] = []
+        budget = self.max_grep_bytes
         for file in self._walk_files(start):
             rel = self._rel(file)
             if allowed is not None and file not in allowed:
@@ -154,8 +163,13 @@ class MeetingTools:
             data = file.read_bytes()
             if b"\x00" in data[:4096]:
                 continue  # binary (frames)
+            if len(data) > budget:
+                hits.append(f"[stopped: searched {self.max_grep_bytes} bytes; narrow 'path']")
+                break
+            budget -= len(data)
             for n, line in enumerate(data.decode("utf-8", errors="replace").splitlines(), 1):
-                if regex.search(line):
+                haystack = line.casefold() if ignore_case else line
+                if any(t in haystack for t in terms):
                     hits.append(f"{rel}:{n}: {line[:500]}")
                     if len(hits) >= self.max_matches:
                         hits.append(f"[stopped at {self.max_matches} matches]")
@@ -201,6 +215,8 @@ class MeetingTools:
         if not isinstance(args, dict):
             raise ToolError("tool input must be an object")
         try:
+            if name == "read" and (frame_id := _frame_file(args.get("path"))):
+                return self.view_frame(frame_id)  # the prompt may say "read frames/f0123.jpg"
             if name == "read":
                 text = self.read(
                     _str(args, "path"), int(args.get("offset", 0)), _opt_int(args, "limit")
@@ -210,7 +226,7 @@ class MeetingTools:
                     _str(args, "pattern"),
                     str(args.get("path", ".")),
                     _opt_str(args, "glob"),
-                    bool(args.get("ignore_case", False)),
+                    bool(args.get("ignore_case", True)),
                 )
             elif name == "glob":
                 text = self.glob(_str(args, "pattern"))
@@ -226,6 +242,14 @@ class MeetingTools:
     def specs() -> list[dict[str, Any]]:
         """Tool definitions, sorted by name so the rendered prefix is byte-stable."""
         return [dict(spec) for spec in _SPECS]
+
+
+def _frame_file(path: object) -> str | None:
+    """``frames/f0123.jpg`` -> ``f0123``; anything else -> None."""
+    if not isinstance(path, str):
+        return None
+    m = re.fullmatch(r"(?:\./)?frames/(f\d{4,})\.jpg", path.replace("\\", "/"))
+    return m[1] if m else None
 
 
 def _check_glob(pattern: str) -> None:
@@ -270,8 +294,10 @@ _SPECS: tuple[dict[str, Any], ...] = (
     {
         "name": "grep",
         "description": (
-            "Search file contents in the meeting folder with a regular expression. Returns "
-            "'path:line: text'. Optional 'path' (file or folder, default '.') and 'glob' filter."
+            "Find lines in the meeting folder's files that contain a plain-text term (not a "
+            "regex). Separate alternatives with '|', e.g. 'churn|cancelamento'. Case-insensitive "
+            "unless ignore_case is false. Returns 'path:line: text'. Optional 'path' (file or "
+            "folder, default '.') and 'glob' filter."
         ),
         "input_schema": {
             "type": "object",
@@ -289,7 +315,8 @@ _SPECS: tuple[dict[str, Any], ...] = (
         "name": "read",
         "description": (
             "Read a text file in the meeting folder (e.g. 'transcript.md', 'context/notes.md') "
-            "as numbered lines. Optional 'offset' (lines to skip) and 'limit' (max lines)."
+            "as numbered lines. Optional 'offset' (lines to skip) and 'limit' (max lines). "
+            "'frames/fNNNN.jpg' returns that screenshot."
         ),
         "input_schema": {
             "type": "object",

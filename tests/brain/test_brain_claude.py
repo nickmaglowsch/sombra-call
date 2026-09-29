@@ -10,6 +10,7 @@ import asyncio
 import base64
 import json
 import os
+import time
 from collections.abc import Sequence
 from datetime import datetime
 from pathlib import Path
@@ -32,6 +33,7 @@ from sombra.brain.claude import (
     cache_hit_rate,
     usage_from_api,
 )
+from sombra.brain.tools import MeetingTools
 from sombra.contracts import (
     AutonomyLevel,
     Brain,
@@ -105,11 +107,17 @@ def fake_system(
     return f"Você responde por {user_name} ({', '.join(aliases)}), nível {level}."
 
 
+def fake_parse_frame_request(answer: str) -> str | None:
+    parts = answer.split()
+    return parts[1] if len(parts) == 2 and parts[0] == "PRECISO_DA_TELA" else None
+
+
 KIT = PromptKit(
     system_prompt=fake_system,
     prefix_builder=FakePrefix,
     build_tail=fake_tail,
     render_request=fake_render,
+    parse_frame_request=fake_parse_frame_request,
 )
 
 
@@ -512,3 +520,97 @@ def test_cache_hit_rate() -> None:
     assert cache_hit_rate(
         Usage(input_tokens=50, cache_read_input_tokens=800, cache_creation_input_tokens=150)
     ) == pytest.approx(0.8)
+
+
+async def test_frame_request_is_served_from_frames_and_never_returned(meeting: Path) -> None:
+    client = FakeClient(text_reply("PRECISO_DA_TELA f0003"), text_reply("O gráfico mostra atraso."))
+    brain = await started(meeting, client, warm_on_start=False)
+    resp = await brain.answer(BrainRequest(trigger(), [meeting / "frames" / "f0001.jpg"]))
+    assert resp.text == "O gráfico mostra atraso."
+    assert list(resp.frames_sent) == ["f0001", "f0003"]
+    follow_up = client.requests[1]["messages"]
+    assert follow_up[1] == {
+        "role": "assistant",
+        "content": [{"type": "text", "text": "PRECISO_DA_TELA f0003"}],
+    }
+    served = follow_up[2]["content"]
+    assert served[0] == {"type": "text", "text": "TELA f0003:"}
+    assert served[1]["type"] == "image"
+    assert images_in(client.requests[1]) == 2  # tail frame + requested frame
+
+    await brain.answer(BrainRequest(trigger("e agora?")))
+    assert images_in(client.requests[2]) == 0  # neither frame reaches the next answer
+
+
+@pytest.mark.parametrize("frame_id", ["f0999", "../../etc/passwd"])
+async def test_frame_request_for_a_missing_or_bad_frame(meeting: Path, frame_id: str) -> None:
+    client = FakeClient(text_reply(f"PRECISO_DA_TELA {frame_id}"), text_reply("preciso confirmar"))
+    brain = await started(meeting, client, warm_on_start=False)
+    resp = await brain.answer(BrainRequest(trigger()))
+    assert resp.text == "preciso confirmar"
+    assert list(resp.frames_sent) == []
+    note = client.requests[1]["messages"][2]["content"]
+    assert images_in(client.requests[1]) == 0
+    assert "não está disponível" in note[0]["text"]
+
+
+async def test_endless_frame_requests_stop_at_the_round_limit(meeting: Path) -> None:
+    replies = [text_reply("PRECISO_DA_TELA f0001") for _ in range(5)]
+    brain = await started(meeting, FakeClient(*replies), warm_on_start=False, max_tool_rounds=2)
+    with pytest.raises(BrainError, match="tool rounds"):
+        await brain.answer(BrainRequest(trigger()))
+
+
+async def test_frame_requests_are_plain_text_without_a_parser(meeting: Path) -> None:
+    kit = PromptKit(fake_system, FakePrefix, fake_tail, fake_render)
+    client = FakeClient(text_reply("PRECISO_DA_TELA f0003"))
+    brain = ClaudeBrain(settings(warm_on_start=False), client, kit)
+    await brain.start(meeting)
+    resp = await brain.answer(BrainRequest(trigger()))
+    assert resp.text == "PRECISO_DA_TELA f0003"
+
+
+async def test_frames_viewed_through_tools_are_reported(meeting: Path) -> None:
+    client = FakeClient(
+        tool_reply(("view_frame", {"frame_id": "f0002"}), ("read", {"path": "frames/f0004.jpg"})),
+        tool_reply(("view_frame", {"frame_id": "f0002"}), ("view_frame", {"frame_id": "f0099"})),
+        text_reply("ok"),
+    )
+    brain = await started(meeting, client, warm_on_start=False)
+    resp = await brain.answer(BrainRequest(trigger(), [meeting / "frames" / "f0001.jpg"]))
+    assert list(resp.frames_sent) == ["f0001", "f0002", "f0004"]
+
+
+async def test_model_that_answered_is_reported(meeting: Path) -> None:
+    reply = ModelReply([{"type": "text", "text": "oi"}], "end_turn", Usage(), "claude-opus-4-8")
+    brain = await started(meeting, FakeClient(reply), warm_on_start=False)
+    resp = await brain.answer(BrainRequest(trigger()))
+    assert resp.model == "claude-opus-4-8"
+
+
+async def test_slow_tools_do_not_block_the_event_loop(
+    meeting: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    def slow_run(self: MeetingTools, name: str, args: dict[str, Any]) -> list[dict[str, Any]]:
+        time.sleep(1.0)  # stands in for any pathological tool call
+        return [{"type": "text", "text": "late"}]
+
+    monkeypatch.setattr(MeetingTools, "run", slow_run)
+    client = FakeClient(tool_reply(("grep", {"pattern": "(a+)+$"})), text_reply("ok"))
+    brain = await started(meeting, client, warm_on_start=False, timeout_s=0.2)
+    ticks = 0
+
+    async def ticker() -> None:
+        nonlocal ticks
+        while True:
+            await asyncio.sleep(0.02)
+            ticks += 1
+
+    task = asyncio.create_task(ticker())
+    start = time.monotonic()
+    with pytest.raises(BrainTimeoutError):
+        await brain.answer(BrainRequest(trigger()))
+    elapsed = time.monotonic() - start
+    task.cancel()
+    assert elapsed < 0.6  # the deadline fired while the tool was still running
+    assert ticks >= 5  # and the loop kept serving other tasks meanwhile

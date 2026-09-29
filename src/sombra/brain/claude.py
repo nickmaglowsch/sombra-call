@@ -97,6 +97,7 @@ class ModelReply:
     content: list[dict[str, Any]]
     stop_reason: str | None
     usage: Usage = field(default_factory=Usage)
+    model: str | None = None  # the model that answered (differs after a refusal fallback)
 
 
 class ModelClient(Protocol):
@@ -139,6 +140,9 @@ class PromptKit:
     prefix_builder: Callable[[Path, str], PrefixSource]
     build_tail: Callable[[TriggerEvent, Sequence[Path]], list[dict[str, Any]]]
     render_request: RenderRequest
+    # Returns the frame id when the model's whole answer is ``PRECISO_DA_TELA fNNNN``
+    # (``brain.prompt.parse_frame_request``); None disables the check.
+    parse_frame_request: Callable[[str], str | None] | None = None
 
 
 # --- settings ----------------------------------------------------------------------
@@ -286,26 +290,38 @@ class ClaudeBrain:
         messages: list[dict[str, Any]] = list(req["messages"])
 
         usage = Usage()
+        sent = [f.stem for f in frames]
         for _round in range(s.max_tool_rounds + 1):
             reply = await self._create({**req, "messages": messages}, deadline)
             usage = _add(usage, reply.usage)
             if reply.stop_reason == "refusal":
                 raise BrainRefusalError("the model declined to answer")
             tool_uses = [b for b in reply.content if b.get("type") == "tool_use"]
-            if reply.stop_reason != "tool_use" or not tool_uses:
-                return BrainResponse(
-                    text=_text(reply.content),
-                    frames_sent=[f.stem for f in frames],
-                    backend=BACKEND_NAME,
-                    model=s.model,
-                    usage=usage,
-                )
+            if reply.stop_reason == "tool_use" and tool_uses:
+                # Off the event loop: file walks must never stall capture or the deadline.
+                results = await asyncio.to_thread(_run_tools, tools, tool_uses, sent)
+            else:
+                text = _text(reply.content)
+                frame_id = self._frame_request(text)
+                if frame_id is None:
+                    return BrainResponse(
+                        text=text,
+                        frames_sent=sent,
+                        backend=BACKEND_NAME,
+                        model=reply.model or s.model,
+                        usage=usage,
+                    )
+                results = await asyncio.to_thread(_serve_frame, tools, frame_id, sent)
             messages = [
                 *messages,
                 {"role": "assistant", "content": reply.content},
-                {"role": "user", "content": [_run_tool(tools, b) for b in tool_uses]},
+                {"role": "user", "content": results},
             ]
         raise BrainError(f"no answer after {s.max_tool_rounds} tool rounds")
+
+    def _frame_request(self, text: str) -> str | None:
+        parse = self._prompt.parse_frame_request
+        return parse(text) if parse is not None else None
 
     async def _create(self, req: dict[str, Any], deadline: float) -> ModelReply:
         """One request, retried once on overload within the answer's deadline."""
@@ -327,6 +343,42 @@ def _check_frame(tools: MeetingTools, frame: Path) -> None:
     real = frame.resolve()
     if not real.is_relative_to(tools.root / "frames") or not real.is_file():
         raise BrainError(f"frame outside the meeting's frames/ folder: {frame}")
+
+
+def _run_tools(
+    tools: MeetingTools, blocks: list[dict[str, Any]], sent: list[str]
+) -> list[dict[str, Any]]:
+    """Run one round of tool calls (in a worker thread); record frames the model viewed."""
+    results = []
+    for block in blocks:
+        result = _run_tool(tools, block)
+        content = result["content"]
+        if not result.get("is_error") and any(i.get("type") == "image" for i in content):
+            for item in content:
+                frame_id = _viewed_frame(item)
+                if frame_id and frame_id not in sent:
+                    sent.append(frame_id)
+        results.append(result)
+    return results
+
+
+def _viewed_frame(item: dict[str, Any]) -> str | None:
+    text = str(item.get("text", ""))
+    if item.get("type") == "text" and text.startswith("TELA ") and text.endswith(":"):
+        return text[5:-1]
+    return None
+
+
+def _serve_frame(tools: MeetingTools, frame_id: str, sent: list[str]) -> list[dict[str, Any]]:
+    """Answer a ``PRECISO_DA_TELA fNNNN`` reply with the frame, served only from ``frames/``."""
+    try:
+        blocks = tools.view_frame(frame_id)
+    except (ToolError, OSError) as e:
+        note = f"A tela {frame_id} não está disponível ({e}). Responda sem ela."
+        return [{"type": "text", "text": note}]
+    if frame_id not in sent:
+        sent.append(frame_id)
+    return [*blocks, {"type": "text", "text": f"Aqui está a tela {frame_id}. Responda à pergunta."}]
 
 
 def _run_tool(tools: MeetingTools, block: dict[str, Any]) -> dict[str, Any]:
@@ -452,6 +504,7 @@ class AnthropicClient:
             content=list(data.get("content", [])),
             stop_reason=data.get("stop_reason"),
             usage=usage_from_api(data.get("usage") or {}),
+            model=data.get("model"),
         )
 
     async def close(self) -> None:

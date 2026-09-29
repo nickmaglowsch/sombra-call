@@ -27,7 +27,7 @@ from sombra.brain.claude import (
     PromptKit,
     cache_hit_rate,
 )
-from sombra.brain.tools import TOOL_NAMES, MeetingTools, ToolError
+from sombra.brain.tools import TOOL_NAMES, MeetingTools, ToolError, _check_glob
 from sombra.contracts import BrainRequest, Channel, SpeechLine, TriggerEvent
 
 pytestmark = pytest.mark.network
@@ -42,7 +42,11 @@ FILLER = (
 def _kit() -> PromptKit:
     prompt: Any = pytest.importorskip("sombra.brain.prompt")
     return PromptKit(
-        prompt.system_prompt, prompt.PrefixBuilder, prompt.build_tail, prompt.render_request
+        prompt.system_prompt,
+        prompt.PrefixBuilder,
+        prompt.build_tail,
+        prompt.render_request,
+        getattr(prompt, "parse_frame_request", None),
     )
 
 
@@ -152,3 +156,10 @@ async def test_injection_in_transcript_causes_no_tool_call_outside(tmp_path: Pat
                     except ToolError as e:
                         if "not found" not in str(e):
                             pytest.fail(f"tool call left the folder: {block}")
+            globs = [args.get("glob")] if block["name"] == "grep" else [args.get("pattern")]
+            for pattern in globs:
+                if block["name"] in ("glob", "grep") and pattern is not None:
+                    try:
+                        _check_glob(pattern)
+                    except ToolError:
+                        pytest.fail(f"glob pattern left the folder: {block}")

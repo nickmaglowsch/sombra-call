@@ -23,7 +23,7 @@ Facts from the official docs (links in the spike report):
 1. **Use our own loop on the Messages API** (`sombra.brain.claude.ClaudeBrain`), not the Agent SDK.
    - We control every byte of the prefix: the tools come from a sorted, constant list, and the prefix comes from `brain.prompt` (#8) and is append-only. With the SDK, the harness owns the system preamble and tool definitions, and may change them across SDK/CLI versions.
    - Each answer is a fresh, stateless request built from the cached prefix plus a new tail. Nothing is carried over, so images reach no later request **by construction**, with no fork or cleanup to get right. The SDK approach also writes every fork, with its base64 frames, to a session file outside the meeting folder. That escapes our retention policy (frames 7 days) and the folder-only data model.
-   - Read-only confinement is our own ~200-line module (`brain.tools`), tested directly for traversal, symlink and absolute-path escapes. There is no shell, write or web tool to disable.
+   - Read-only confinement is our own ~200-line module (`brain.tools`), tested directly for traversal, symlink and absolute-path escapes. There is no shell, write or web tool to disable. `grep` matches plain text (`|`-separated alternatives), not regular expressions: the model picks the pattern after reading untrusted meeting text, so a regex would open catastrophic backtracking (ReDoS). Tool calls run in a worker thread, so the 12 s deadline can always fire.
    - No subprocess per trigger. The SDK spawns the Claude Code CLI on each `query()`; its startup time lands on the latency budget. The spike harness measures this, pending a human run.
    - Usage fields (`cache_read_input_tokens`, `cache_creation_input_tokens`) come straight from each response and map 1:1 to `contracts.Usage`.
 2. **Use the 1-hour cache TTL** (`ClaudeSettings.cache_ttl = "1h"`), set on the prefix breakpoint.
@@ -35,6 +35,7 @@ Facts from the official docs (links in the spike report):
 ## Consequences
 
 - Within one answer, the tool loop re-sends that answer's own images on each round, because the model needs them. The next answer never sees them. Tested in `test_images_never_reach_a_later_answer`.
+- If the model's whole answer is a frame request (`PRECISO_DA_TELA fNNNN`, #8's prompt), the loop serves that frame from `frames/` as one more round instead of returning the request as the answer. Such frames, and frames pulled with `view_frame` or `read frames/fNNNN.jpg`, are reported in `frames_sent`.
 - We don't get Claude Code's built-in agent features: subagents, compaction and its tuned tool descriptions. None of them are needed for a 1–3 sentence answer over one folder.
 - The prefix hit rate falls below 80% only because of the transcript that grew since the last trigger. At 150 words/min, a 12-minute gap adds about 3.6k new tokens to write. A rolling summary epoch (C4) is the other planned miss.
 - **Revisit** when the human spike run reports measured p50/p95 latency and cache numbers. Also revisit if it shows the Agent SDK fork is materially faster, or if Opus 5.5 at `low` effort misses the 2–4 s budget; the next candidate then is `claude-sonnet-5-5`, which the harness runs with `--model`.

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import time
 from pathlib import Path
 
 import pytest
@@ -165,8 +166,8 @@ def test_grep_path_and_glob_filters(tools: MeetingTools) -> None:
 
 
 def test_grep_rejects_bad_patterns(tools: MeetingTools) -> None:
-    with pytest.raises(ToolError, match="regular expression"):
-        tools.grep("(")
+    with pytest.raises(ToolError, match="some text"):
+        tools.grep(" | ")
     with pytest.raises(ToolError, match="longer"):
         tools.grep("a" * 201)
     with pytest.raises(ToolError):
@@ -267,3 +268,32 @@ def test_specs_are_read_only_sorted_and_stable() -> None:
     assert MeetingTools.specs()[0]["name"] == "glob"
     for spec in specs:
         assert spec["input_schema"]["additionalProperties"] is False
+
+
+def test_grep_is_plain_text_so_catastrophic_patterns_are_fast(meeting: Path) -> None:
+    # (a+)+$ took 21 s as a regex on a 28-char line (review of PR #34); now it is a literal.
+    (meeting / "context" / "evil.md").write_text("a" * 5000 + "!\n", "utf-8")
+    tools = MeetingTools(meeting)
+    start = time.monotonic()
+    assert tools.grep("(a+)+$") == "(no matches)"
+    assert tools.grep("(a+)+$|((a|aa)*)*b") == "(no matches)"
+    assert time.monotonic() - start < 1.0
+    assert tools.grep("(") == "(no matches)"  # regex metacharacters are just text
+
+
+def test_grep_alternatives_and_case(tools: MeetingTools) -> None:
+    out = tools.grep("SEXTA | Roadmap")
+    assert "transcript.md:1:" in out and "context/roadmap.md:1: # Roadmap" in out
+    assert tools.grep("SEXTA", ignore_case=False) == "(no matches)"
+
+
+def test_grep_caps_bytes_scanned(meeting: Path) -> None:
+    out = MeetingTools(meeting, max_grep_bytes=50).grep("beta")
+    assert "stopped" in out
+
+
+def test_read_of_a_frame_file_returns_the_image(tools: MeetingTools) -> None:
+    blocks = tools.run("read", {"path": "frames/f0001.jpg"})
+    assert blocks[1]["type"] == "image"
+    with pytest.raises(ToolError):
+        tools.run("read", {"path": "frames/f0999.jpg"})
