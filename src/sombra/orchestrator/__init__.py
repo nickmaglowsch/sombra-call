@@ -7,9 +7,11 @@ summary-epoch schedule (C4). PRD: "Fluxo do gatilho", "Confiabilidade".
 ``ask`` answers questions about a recorded meeting (``sombra ask``, PRD use case
 "Depois da reunião"); it wires ``brain``, ``store`` and ``config``.
 
-This package is the only one allowed to import concrete modules; until #17 wires
-them, it depends on ``sombra.contracts`` alone and is tested against the fakes in
-``tests/fakes/``.
+This package is the only one allowed to import concrete modules. ``session`` and
+``hooks`` depend on ``sombra.contracts`` alone and are tested against the fakes in
+``tests/fakes/``; ``wiring``, ``live`` and ``replay`` build the real modules for
+``sombra start`` and ``sombra replay`` (#17, see docs/usage.md). They are not
+re-exported here, so importing the package stays cheap.
 """
 
 from sombra.orchestrator.hooks import (
