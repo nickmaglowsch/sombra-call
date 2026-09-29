@@ -1,0 +1,163 @@
+# Tag-driven releases (issue #44, ADR 0044). See docs/release.md.
+#
+# - push of a tag vX.Y.Z[-rcN|-betaN|-alphaN]: build → smoke install → publish a GitHub Release.
+# - pull_request touching the release files: the same build and smoke jobs, no publish,
+#   so the PR proves the pipeline.
+#
+# Not a required check: the ruleset only requires the jobs in ci.yml.
+name: Release
+
+on:
+  push:
+    tags: ["v*"]
+  pull_request:
+    paths:
+      - .github/workflows/release.yml
+      - scripts/release/**
+      - scripts/install.sh
+      - tests/release/**
+      - pyproject.toml
+      - uv.lock
+      - src/sombra/__init__.py
+      - src/sombra/cli.py
+
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    name: build
+    runs-on: ubuntu-latest
+    outputs:
+      version: ${{ steps.meta.outputs.version }}
+      prerelease: ${{ steps.meta.outputs.prerelease }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0 # hatch-vcs derives the version from the tags
+      - uses: astral-sh/setup-uv@v6
+      - name: Tag is on main
+        if: github.ref_type == 'tag'
+        run: |
+          git fetch --no-tags origin main
+          if ! git merge-base --is-ancestor "$GITHUB_SHA" origin/main; then
+            echo "::error::$GITHUB_REF_NAME points at a commit that is not on main; tag a merged commit."
+            exit 1
+          fi
+      - name: Build sdist + wheel
+        run: uv build --out-dir dist
+      - name: Add install.sh (when it exists)
+        run: |
+          if [ -f scripts/install.sh ]; then cp scripts/install.sh dist/install.sh; fi
+      - name: Version matches the tag
+        id: meta
+        run: |
+          if [ "$GITHUB_REF_TYPE" = tag ]; then
+            uv run --no-project --python 3.12 scripts/release/tags.py check "$GITHUB_REF_NAME" \
+              --dist dist --github-output "$GITHUB_OUTPUT"
+          else
+            wheel=$(basename dist/sombra-*.whl)
+            echo "version=$(echo "$wheel" | cut -d- -f2)" | tee -a "$GITHUB_OUTPUT"
+            echo "prerelease=true" | tee -a "$GITHUB_OUTPUT"
+          fi
+      - name: Write and verify SHA256SUMS
+        run: |
+          uv run --no-project --python 3.12 scripts/release/checksums.py write dist
+          uv run --no-project --python 3.12 scripts/release/checksums.py verify dist
+          (cd dist && sha256sum -c SHA256SUMS)
+      - uses: actions/upload-artifact@v4
+        with:
+          name: dist
+          path: dist/
+          if-no-files-found: error
+          retention-days: 14
+
+  smoke:
+    name: smoke (${{ matrix.os }})
+    needs: build
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        # ADR 0044: macOS 14+ on Apple Silicon; Ubuntu 22.04/24.04 on x86_64 and aarch64.
+        os: [macos-14, ubuntu-latest, ubuntu-22.04, ubuntu-24.04-arm]
+    env:
+      # Install with a uv-managed CPython, as end users do, never the runner's Python.
+      UV_PYTHON_PREFERENCE: only-managed
+      EXPECTED_VERSION: ${{ needs.build.outputs.version }}
+    steps:
+      # No checkout: install only the built artifacts, the way end users get them.
+      - uses: actions/download-artifact@v4
+        with:
+          name: dist
+          path: dist
+      - name: Verify SHA256SUMS with the stock tool (the command docs/release.md gives users)
+        working-directory: dist
+        run: |
+          if [ "$RUNNER_OS" = macOS ]; then
+            shasum -a 256 -c --ignore-missing SHA256SUMS
+          else
+            sha256sum -c --ignore-missing SHA256SUMS
+          fi
+      - uses: astral-sh/setup-uv@v6
+      - name: Install
+        run: |
+          wheel=$(ls dist/sombra-*.whl)
+          if [ -f dist/install.sh ]; then
+            sh dist/install.sh --from-wheel "$wheel" --yes --no-models
+          else
+            uv tool install --python 3.12 "$wheel"
+          fi
+          uv tool dir --bin >> "$GITHUB_PATH"
+      - name: sombra --version
+        run: |
+          got=$(sombra --version)
+          echo "$got"
+          test "$got" = "sombra $EXPECTED_VERSION"
+      - name: sombra --help
+        run: sombra --help
+      - name: sombra new
+        run: |
+          dir=$(sombra new "Release smoke")
+          echo "$dir"
+          test -d "$dir"
+      # TODO(#17): add `sombra replay` with the fake brain once the wiring PR merges.
+
+  publish:
+    name: publish
+    if: github.event_name == 'push' && github.ref_type == 'tag'
+    needs: [build, smoke]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0 # the notes need the previous tag
+      - uses: astral-sh/setup-uv@v6
+      - uses: actions/download-artifact@v4
+        with:
+          name: dist
+          path: dist
+      - name: Verify SHA256SUMS
+        run: uv run --no-project --python 3.12 scripts/release/checksums.py verify dist
+      - name: Release notes from merged PR titles
+        run: |
+          uv run --no-project --python 3.12 scripts/release/notes.py "$GITHUB_REF_NAME" \
+            --repo "$GITHUB_REPOSITORY" --output "$RUNNER_TEMP/notes.md"
+          cat "$RUNNER_TEMP/notes.md"
+      - name: Create the GitHub Release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          PRERELEASE: ${{ needs.build.outputs.prerelease }}
+        run: |
+          flags=""
+          if [ "$PRERELEASE" = true ]; then flags="--prerelease"; else flags="--latest"; fi
+          # shellcheck disable=SC2086 # $flags is one known flag
+          gh release create "$GITHUB_REF_NAME" dist/* \
+            --verify-tag --title "Sombra $GITHUB_REF_NAME" \
+            --notes-file "$RUNNER_TEMP/notes.md" $flags
