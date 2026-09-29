@@ -245,3 +245,19 @@ def test_statements_about_the_user_do_not_trigger(text: str) -> None:
 
 def test_dropped_question_mark_after_voce_still_triggers() -> None:
     assert make().feed(others(0, "nick você já testou isso em produção")) is not None
+
+
+@pytest.mark.parametrize(
+    "text",
+    [
+        "E aí Nick tá tudo certo com o deploy?",
+        "Nick tá conseguindo ver minha tela?",
+        "Nick Pode compartilhar a tela?",
+    ],
+)
+def test_dropped_comma_questions_still_trigger(text: str) -> None:
+    assert make().feed(others(0, text)) is not None
+
+
+def test_praise_without_a_comma_is_not_an_implied_question() -> None:
+    assert make().feed(others(0, "nick você tem razão")) is None

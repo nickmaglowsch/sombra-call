@@ -41,7 +41,8 @@ detector = NameTriggerDetector("Nick", aliases=["Nicolas"], settings=TriggerSett
    (a capitalised word right after the name that is not part of a configured alias:
    "Nicolas Cage …"). With a comma ("Nick, tá de férias?") it is a call. When the
    name opens the line and "você/cê/tu" follows directly, a dropped `?` is assumed
-   ("nick você já testou isso em produção").
+   ("nick você já testou isso em produção"), unless the rest is praise ("nick você
+   tem razão", "mandou bem").
 4. **Request (G2).** Question mark, interrogatives, opinion asks ("você acha"),
    request verbs ("pode", "consegue", "explica", "me diz"), turn handoffs ("sua vez",
    "contigo"). "Você" and weak verbs only count inside a question. Closings
@@ -71,3 +72,4 @@ Known misses on the holdout split, kept on purpose so the numbers stay honest:
 - `hm08` "Nico, …": a 3-letter key only matches exactly, so "Nico" is not "Nick".
 - `hn08` "Nick, você manda muito bem nisso.": "manda" is read as a request verb.
 - `hw04` "tá mas nick e o custo disso": no punctuation and no request word at all.
+- `hw06` "Nick você manda muito bem": same cause as `hn08` ("manda" as a request).

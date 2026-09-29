@@ -35,7 +35,7 @@ _INTERJECTIONS = _wordset(
 _SUBJECT_VERBS = _wordset(
     "disse falou fez ficou mandou comentou pediu vai foi esta estava tava tinha tem ja "
     "era sabe acha achou acabou subiu entrou saiu chegou pegou ia deve precisa quer queria "
-    "conseguiu apresentou mostrou fechou ta tambem sempre nunca ainda so "
+    "conseguiu apresentou mostrou fechou tambem sempre nunca ainda so "
     "said says did will was is has had thinks"
 )
 _END_PUNCT = frozenset("?!.…")
@@ -83,7 +83,11 @@ def name_position(tokens: Sequence[Token], hit: NameHit) -> Position:
     if nxt is not None and nxt.is_word:
         if nxt.text in _SUBJECT_VERBS and before_ok:
             return Position(0.0, reference=True)
-        if nxt.raw[:1].isupper() and nxt.text not in _SECOND_PERSON_WORDS:
+        if (
+            nxt.raw[:1].isupper()
+            and nxt.text not in _SECOND_PERSON_WORDS
+            and not _ADDRESSED_OPENING.match(nxt.text)
+        ):
             return Position(0.0, reference=True)  # a namesake's full name: "Nicolas Cage ..."
     if before_ok and after_ok:
         return Position(VOCATIVE_FULL, reference=False)
@@ -101,10 +105,12 @@ def _start_position(rest: Sequence[Token]) -> Position:
     comma; "Nick tá de férias, né?" is a statement about Nick to the group, where the
     only question is the tag at the end.
     """
-    if rest[0].text in _SECOND_PERSON_WORDS:
-        return Position(VOCATIVE_START, reference=False, implied_question=True)
     text = " ".join(t.raw for t in rest)
     folded = fold(text)
+    if rest[0].text in _SECOND_PERSON_WORDS:
+        # "nick você tem razão" is praise, not a question with a dropped "?"
+        implied = _EVALUATIVE.search(folded) is None
+        return Position(VOCATIVE_START, reference=False, implied_question=implied)
     if _ADDRESSED_OPENING.match(folded):
         return Position(VOCATIVE_START, reference=False)
     if (m := _TAG_QUESTION.search(folded)) and request_strength(folded[: m.start()]) < 0.4:
@@ -178,6 +184,10 @@ _SECOND_PERSON = _words(
     "voce", "voces", "vc", "vcs", "ce", "tu", "te", "contigo", "you", "your",
 )  # fmt: skip
 _SECOND_PERSON_WORDS = _wordset("voce vc ce tu you")
+_EVALUATIVE = _words(
+    "tem razao", "manda bem", "manda muito bem", "mandou bem", "mandou muito bem", "arrasou",
+    "arrasa", "e o cara", "e demais", "salvou", "e fera",
+)  # fmt: skip
 # Tag questions turn a statement into a "question" without asking the listener anything.
 _TAG_QUESTION = re.compile(
     r"(?:^|[\s,])(?:ne|ne nao|nao e|nao foi|nao \w+|certo|ok|right)"
