@@ -1,0 +1,281 @@
+# Homebrew tap for Sombra.app (issue #51). See docs/release.md#homebrew-tap.
+#
+# - pull_request touching the cask: render it against a fake SHA256SUMS, brew style +
+#   brew audit --cask --strict on macos-14, and a dry-run bump that prints the diff it
+#   would push to the tap.
+# - a final release: render the cask from the release's SHA256SUMS, audit it, install it
+#   on macos-14 (sombra --version, then brew uninstall --zap, which must leave
+#   ~/Sombra/meetings alone) and push Casks/sombra.rb to nickmaglowsch/homebrew-sombra.
+#   Pre-releases are skipped. Without the HOMEBREW_TAP_TOKEN secret, the push is a no-op
+#   with a notice.
+# - workflow_dispatch: the same for any release tag, a dry run by default. app_zip_url
+#   smoke-installs a given Sombra-<version>-macos-arm64.zip from a local file URL.
+#
+# release.yml publishes with GITHUB_TOKEN, and events caused by GITHUB_TOKEN start no
+# workflows, so its completion is caught with workflow_run. `release: published` covers a
+# release published by hand. Both are idempotent: an unchanged cask pushes nothing.
+#
+# Not a required check: the ruleset only requires the jobs in ci.yml.
+name: Homebrew
+
+on:
+  pull_request:
+    paths:
+      - .github/workflows/homebrew.yml
+      - packaging/homebrew/**
+      - tests/packaging/**
+  workflow_run:
+    workflows: [Release]
+    types: [completed]
+  release:
+    types: [published]
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "Release tag (vX.Y.Z); empty for the latest release"
+        required: false
+        default: ""
+      dry_run:
+        description: "Print the diff instead of pushing to the tap"
+        type: boolean
+        default: true
+      app_zip_url:
+        description: "Optional: smoke-install this Sombra-<version>-macos-arm64.zip (file URL cask)"
+        required: false
+        default: ""
+
+concurrency:
+  group: homebrew-${{ github.event_name == 'pull_request' && github.ref || 'tap' }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+permissions:
+  contents: read
+
+env:
+  TAP_REPO: nickmaglowsch/homebrew-sombra
+  # A made-up version for runs that have no release to render (PRs).
+  FAKE_VERSION: 0.0.1
+
+jobs:
+  resolve:
+    name: resolve
+    runs-on: ubuntu-latest
+    if: >-
+      github.event_name != 'workflow_run' ||
+      (github.event.workflow_run.conclusion == 'success' && github.event.workflow_run.event == 'push')
+    outputs:
+      tag: ${{ steps.r.outputs.tag }}
+      version: ${{ steps.r.outputs.version }}
+      release: ${{ steps.r.outputs.release }}
+      bump: ${{ steps.r.outputs.bump }}
+      dry_run: ${{ steps.r.outputs.dry_run }}
+      smoke: ${{ steps.r.outputs.smoke }}
+    steps:
+      - name: Which release, and what to do with it
+        id: r
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          EVENT: ${{ github.event_name }}
+          RUN_TAG: ${{ github.event.workflow_run.head_branch }}
+          RELEASE_TAG: ${{ github.event.release.tag_name }}
+          INPUT_TAG: ${{ inputs.tag }}
+          INPUT_DRY_RUN: ${{ inputs.dry_run }}
+          INPUT_ZIP: ${{ inputs.app_zip_url }}
+        run: |
+          tag="" dry_run=true bump=false
+          case "$EVENT" in
+            pull_request) ;;
+            workflow_run) tag="$RUN_TAG"; dry_run=false ;;
+            release) tag="$RELEASE_TAG"; dry_run=false ;;
+            workflow_dispatch)
+              dry_run="$INPUT_DRY_RUN"
+              tag="$INPUT_TAG"
+              if [ -z "$tag" ]; then
+                tag=$(gh release view --json tagName --jq .tagName 2>/dev/null || true)
+                [ -n "$tag" ] || echo "::notice::No release yet; rendering against a fake SHA256SUMS."
+              fi ;;
+          esac
+          if [ -n "$tag" ]; then
+            if ! pre=$(gh release view "$tag" --json isPrerelease --jq .isPrerelease); then
+              echo "::error::No GitHub release for $tag."
+              exit 1
+            fi
+            if [ "$pre" = true ]; then
+              echo "::notice::$tag is a pre-release; the tap only gets final releases."
+              tag=""
+            else
+              bump=true
+            fi
+          fi
+          if [ -n "$tag" ]; then
+            version="${tag#v}" release=true
+          else
+            version="$FAKE_VERSION" release=false
+          fi
+          # The PR run proves the bump with a dry run against the fake SHA256SUMS.
+          [ "$EVENT" = pull_request ] && bump=true
+          # Install the real release before it goes to the tap, or a given zip on request.
+          smoke=false
+          if [ "$release" = true ] || [ -n "$INPUT_ZIP" ]; then smoke=true; fi
+          {
+            echo "tag=$tag"
+            echo "version=$version"
+            echo "release=$release"
+            echo "bump=$bump"
+            echo "dry_run=$dry_run"
+            echo "smoke=$smoke"
+          } | tee -a "$GITHUB_OUTPUT"
+
+  validate:
+    name: validate (brew style + audit)
+    needs: resolve
+    runs-on: macos-14
+    timeout-minutes: 20
+    env:
+      TAG: ${{ needs.resolve.outputs.tag }}
+      VERSION: ${{ needs.resolve.outputs.version }}
+      RELEASE: ${{ needs.resolve.outputs.release }}
+      GH_TOKEN: ${{ github.token }}
+      GH_REPO: ${{ github.repository }}
+      HOMEBREW_NO_AUTO_UPDATE: "1"
+      HOMEBREW_NO_ANALYTICS: "1"
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v6
+      - name: SHA256SUMS (the release's, or a fake one)
+        run: |
+          mkdir -p "$RUNNER_TEMP/sums"
+          if [ "$RELEASE" = true ]; then
+            gh release download "$TAG" --pattern SHA256SUMS --dir "$RUNNER_TEMP/sums"
+          else
+            # Fake asset bytes: only the shape of SHA256SUMS matters to the renderer.
+            cd "$RUNNER_TEMP/sums"
+            printf 'not a real app\n' > "Sombra-$VERSION-macos-arm64.zip"
+            printf 'not a real wheel\n' > "sombra-$VERSION-py3-none-any.whl"
+            shasum -a 256 ./*.zip ./*.whl | sed 's#  \./#  #' > SHA256SUMS
+          fi
+          cat "$RUNNER_TEMP/sums/SHA256SUMS"
+      - name: Render the cask
+        run: |
+          uv run --no-project --python 3.12 packaging/homebrew/cask.py render \
+            --version "$VERSION" --sums "$RUNNER_TEMP/sums/SHA256SUMS" --output rendered/sombra.rb
+          cp "$RUNNER_TEMP/sums/SHA256SUMS" rendered/SHA256SUMS
+          cat rendered/sombra.rb
+      - name: brew style + brew audit --cask --strict
+        run: |
+          brew --version
+          sh packaging/homebrew/ci.sh audit rendered/sombra.rb
+      - uses: actions/upload-artifact@v4
+        with:
+          name: homebrew-cask
+          path: rendered/
+          if-no-files-found: error
+          retention-days: 14
+
+  smoke:
+    name: smoke (install + uninstall --zap)
+    needs: [resolve, validate]
+    if: needs.resolve.outputs.smoke == 'true'
+    runs-on: macos-14
+    timeout-minutes: 30
+    env:
+      VERSION: ${{ needs.resolve.outputs.version }}
+      RELEASE: ${{ needs.resolve.outputs.release }}
+      ZIP_URL: ${{ inputs.app_zip_url }}
+      HOMEBREW_NO_AUTO_UPDATE: "1"
+      HOMEBREW_NO_ANALYTICS: "1"
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v6
+      - uses: actions/download-artifact@v4
+        with:
+          name: homebrew-cask
+          path: artifact
+      - name: Install and uninstall the release cask
+        if: env.ZIP_URL == ''
+        # The cask as it will go to the tap: downloads the real, notarized release asset.
+        run: sh packaging/homebrew/ci.sh smoke artifact/sombra.rb "$VERSION"
+      - name: Install and uninstall a given zip from a local file URL
+        if: env.ZIP_URL != ''
+        env:
+          SOMBRA_SMOKE_ADHOC: "1"
+        run: |
+          zip="$RUNNER_TEMP/Sombra.zip"
+          curl -fsSL -o "$zip" "$ZIP_URL"
+          uv run --no-project --python 3.12 packaging/homebrew/cask.py render \
+            --version "$VERSION" --zip "$zip" --url "file://$zip" --output local/sombra.rb
+          cat local/sombra.rb
+          sh packaging/homebrew/ci.sh smoke local/sombra.rb "$VERSION"
+
+  bump:
+    name: bump tap${{ needs.resolve.outputs.dry_run == 'true' && ' (dry run)' || '' }}
+    needs: [resolve, validate, smoke]
+    # The smoke job is skipped only when there is no release to install (PRs, dry runs).
+    if: >-
+      always() && needs.resolve.outputs.bump == 'true' && needs.validate.result == 'success' &&
+      (needs.smoke.result == 'success' ||
+       (needs.smoke.result == 'skipped' && needs.resolve.outputs.release != 'true'))
+    runs-on: ubuntu-latest
+    env:
+      VERSION: ${{ needs.resolve.outputs.version }}
+      DRY_RUN: ${{ needs.resolve.outputs.dry_run }}
+      TAP_TOKEN: ${{ secrets.HOMEBREW_TAP_TOKEN }}
+    steps:
+      - name: Token present?
+        id: token
+        run: |
+          if [ -n "$TAP_TOKEN" ]; then
+            echo "have=true" >> "$GITHUB_OUTPUT"
+          elif [ "$DRY_RUN" = true ]; then
+            echo "have=false" >> "$GITHUB_OUTPUT"
+            echo "::notice::No HOMEBREW_TAP_TOKEN: the dry run diffs against the public tap."
+          else
+            echo "have=false" >> "$GITHUB_OUTPUT"
+            echo "::notice::HOMEBREW_TAP_TOKEN is not set; the tap was not updated (see docs/release.md#homebrew-tap)."
+          fi
+      - uses: actions/checkout@v4
+        if: steps.token.outputs.have == 'true' || env.DRY_RUN == 'true'
+      - uses: astral-sh/setup-uv@v6
+        if: steps.token.outputs.have == 'true' || env.DRY_RUN == 'true'
+      - uses: actions/download-artifact@v4
+        if: steps.token.outputs.have == 'true' || env.DRY_RUN == 'true'
+        with:
+          name: homebrew-cask
+          path: artifact
+      - name: Check out the tap
+        if: steps.token.outputs.have == 'true' || env.DRY_RUN == 'true'
+        run: |
+          if [ -n "$TAP_TOKEN" ]; then
+            url="https://x-access-token:${TAP_TOKEN}@github.com/${TAP_REPO}.git"
+          else
+            url="https://github.com/${TAP_REPO}.git"
+          fi
+          if ! git clone --depth 1 "$url" tap 2>/dev/null; then
+            if [ "$DRY_RUN" != true ]; then
+              echo "::error::Cannot clone $TAP_REPO with HOMEBREW_TAP_TOKEN (see docs/release.md#homebrew-tap)."
+              exit 1
+            fi
+            echo "::notice::$TAP_REPO does not exist yet; diffing against an empty tap."
+            mkdir tap
+          fi
+      - name: Write Casks/sombra.rb (diff below)
+        id: bump
+        if: steps.token.outputs.have == 'true' || env.DRY_RUN == 'true'
+        run: |
+          dry=""
+          [ "$DRY_RUN" = true ] && dry="--dry-run"
+          # shellcheck disable=SC2086 # $dry is one flag or nothing
+          uv run --no-project --python 3.12 packaging/homebrew/cask.py bump $dry \
+            --version "$VERSION" --sums artifact/SHA256SUMS --tap-dir tap \
+            --github-output "$GITHUB_OUTPUT"
+      - name: Push to the tap
+        if: steps.token.outputs.have == 'true' && env.DRY_RUN != 'true' && steps.bump.outputs.changed == 'true'
+        working-directory: tap
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add Casks/sombra.rb
+          git commit -m "sombra $VERSION" -m "From $GITHUB_SERVER_URL/$GITHUB_REPOSITORY/releases/tag/v$VERSION"
+          git push origin HEAD
+          echo "::notice::Pushed sombra $VERSION to $TAP_REPO."

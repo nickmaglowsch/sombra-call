@@ -14,6 +14,21 @@ curl -fsSL https://github.com/nickmaglowsch/sombra-call/releases/latest/download
 
 On Ubuntu, live capture (microphone, system audio, screen) is not built yet ([ADR 0016](adr/0016-linux-wayland-adapters.md)). Everything else works: `replay`, `ask`, `minutes`, `report`. `sombra doctor` says so as a warning.
 
+## Homebrew (macOS)
+
+On macOS you can install the signed `Sombra.app` with Homebrew instead:
+
+```sh
+brew install --cask nickmaglowsch/sombra/sombra
+```
+
+This installs `Sombra.app` into `/Applications` and links the `sombra` command, which runs through the app. Microphone, Screen Recording and Accessibility are then granted to **Sombra**, not to your terminal. Homebrew prints the next steps: `sombra doctor`, `sombra models download`, grant the permissions to Sombra, then `sombra setup`. It needs macOS 14+ on Apple Silicon, like the installer.
+
+- **Upgrade:** `brew upgrade --cask sombra`.
+- **Uninstall:** `brew uninstall --cask sombra` keeps your config and models. `brew uninstall --cask --zap sombra` also deletes `~/.config/sombra` and `~/.cache/sombra`. Neither ever deletes your meetings in `~/Sombra/meetings`.
+
+The cask is available from the first release that ships `Sombra.app` (#50). How the tap is kept up to date is in [release.md](release.md#homebrew-tap).
+
 ## What the installer does
 
 Every step is printed before it runs. Nothing is sent anywhere (no telemetry).
