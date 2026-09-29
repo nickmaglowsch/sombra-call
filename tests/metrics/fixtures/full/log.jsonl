@@ -1,0 +1,21 @@
+{"type": "trigger", "trigger_id": "t1", "ts": "2026-09-29T14:32:09-03:00", "detected_at": "2026-09-29T14:32:09-03:00", "question": "?", "matched_alias": "Nick", "score": 0.9, "needs_screen": false, "added_in_v2": {"x": 1}}
+{"type": "suggestion", "suggestion_id": "s1", "trigger_id": "t1", "ts": "2026-09-29T14:32:12-03:00", "text": "resposta 1", "frames_sent": [], "backend": "fake", "model": "claude-x", "latency_ms": 3000, "usage": {"input_tokens": 100, "output_tokens": 50, "cache_read_input_tokens": 0, "cache_creation_input_tokens": 900}}
+{"type": "action", "suggestion_id": "s1", "ts": "2026-09-29T14:32:20-03:00", "kind": "approve", "final_text": "resposta 1"}
+{"type": "trigger", "trigger_id": "t2", "ts": "2026-09-29T14:36:00-03:00", "detected_at": "2026-09-29T14:36:00-03:00", "question": "?", "matched_alias": "Nick", "score": 0.9, "needs_screen": false}
+{"type": "suggestion", "suggestion_id": "s2", "trigger_id": "t2", "ts": "2026-09-29T14:36:05-03:00", "text": "resposta 2", "frames_sent": ["f0001"], "backend": "fake", "model": "claude-x", "latency_ms": 5000, "usage": {"input_tokens": 100, "output_tokens": 50, "cache_read_input_tokens": 900, "cache_creation_input_tokens": 0}}
+{"type": "action", "suggestion_id": "s2", "ts": "2026-09-29T14:36:30-03:00", "kind": "edit", "final_text": "resposta 2 editada"}
+{"type": "trigger", "trigger_id": "t3", "ts": "2026-09-29T14:40:00-03:00", "detected_at": "2026-09-29T14:40:00-03:00", "question": "?", "matched_alias": "Nick", "score": 0.9, "needs_screen": false}
+{"type": "suggestion", "suggestion_id": "s3", "trigger_id": "t3", "ts": "2026-09-29T14:40:07-03:00", "text": "resposta 3", "frames_sent": [], "backend": "fake", "model": "claude-x", "latency_ms": 7000, "usage": {"input_tokens": 100, "output_tokens": 50, "cache_read_input_tokens": 900, "cache_creation_input_tokens": 0}}
+{"type": "action", "suggestion_id": "s3", "ts": "2026-09-29T14:40:10-03:00", "kind": "not_for_me", "final_text": null}
+{"type": "trigger", "trigger_id": "t4", "ts": "2026-09-29T14:44:00-03:00", "detected_at": "2026-09-29T14:44:00-03:00", "question": "?", "matched_alias": "Nick", "score": 0.9, "needs_screen": false}
+{"type": "suggestion", "suggestion_id": "s4", "trigger_id": "t4", "ts": "2026-09-29T14:44:12-03:00", "text": "resposta 4", "frames_sent": ["f0001", "f0002", "f0003"], "backend": "fake", "model": "claude-x", "latency_ms": 12000, "usage": {"input_tokens": 100, "output_tokens": 50, "cache_read_input_tokens": 900, "cache_creation_input_tokens": 0}}
+{"type": "action", "suggestion_id": "s4", "ts": "2026-09-29T14:44:30-03:00", "kind": "approve", "final_text": "resposta 4"}
+{"type": "trigger", "trigger_id": "t5", "ts": "2026-09-29T14:48:00-03:00", "detected_at": "2026-09-29T14:48:00-03:00", "question": "?", "matched_alias": "Nick", "score": 0.9, "needs_screen": false}
+{"type": "suggestion", "suggestion_id": "s5", "trigger_id": "t5", "ts": "2026-09-29T14:48:04-03:00", "text": "resposta 5", "frames_sent": ["f0002"], "backend": "fake", "model": "claude-x", "latency_ms": 4000, "usage": {"input_tokens": 100, "output_tokens": 50, "cache_read_input_tokens": 900, "cache_creation_input_tokens": 0}}
+{"type": "action", "suggestion_id": "s5", "ts": "2026-09-29T14:48:20-03:00", "kind": "discard", "final_text": null}
+{"type": "trigger", "trigger_id": "t6", "ts": "2026-09-29T14:55:00-03:00", "detected_at": "2026-09-29T14:55:00-03:00", "question": "?", "matched_alias": "Nik", "score": 0.9, "needs_screen": false}
+{"type": "agent_error", "trigger_id": "t6", "ts": "2026-09-29T14:55:09-03:00", "error": "timeout"}
+{"type": "summary_epoch", "ts": "2026-09-29T14:59:00-03:00", "epoch": 1, "model": "claude-small", "usage": {"input_tokens": 1000, "output_tokens": 200}}
+{"type": "screen_share_started", "ts": "2026-09-29T14:31:00-03:00"}
+{"type": "action", "suggestion_id": "s1", "ts": "2026-09-29T14:33:00-03:00", "kind": "thumbs_up"}
+{"type":"suggestion","suggestion_id":"s9","trigger
