@@ -11,6 +11,10 @@ network: the endpoint is ``127.0.0.1``. Run it by hand after a Codex upgrade::
 It runs past ``MAX_TESTED_CLI_VERSION``: passing on a newer CLI is what allows
 raising that cap (ADR 0018).
 
+The last two tests force a real ``exec_command`` and check that it can read the meeting
+folder and nothing next to it or next to the codex binary (#63: on Linux every command
+used to fail in bwrap).
+
 A forced tool call also shows why the request is the control that matters: on
 0.159.1 a code-mode ``exec`` or a ``spawn_agent`` call leaves no item in the JSONL,
 so no output guard could have seen it.
@@ -193,7 +197,9 @@ def brain_for(
         f"SOMBRA_FAKE_PROVIDER={provider}",
         str(wrapper),
     )
-    settings = CodexSettings(user_name="Nick", executable=executable, timeout_s=90, **kw)
+    settings = CodexSettings(
+        user_name="Nick", executable=executable, codex_binary=codex, timeout_s=90, **kw
+    )
     return CodexBrain(settings, api_key=lambda: "sk-fake")
 
 
@@ -253,3 +259,72 @@ async def test_forced_removed_tool_call_is_not_run(
     assert "code mode ran" not in outputs
     assert "Script completed" not in outputs
     assert "unsupported" in outputs  # 0.159.1: "unsupported custom tool call: exec" etc.
+
+
+def shell_call(cmd: str) -> dict[str, Any]:
+    return {
+        "type": "function_call",
+        "call_id": "s1",
+        "name": "exec_command",
+        "arguments": json.dumps({"cmd": cmd}),
+        "status": "completed",
+    }
+
+
+async def test_shell_reads_the_meeting_folder_and_nothing_else(
+    codex: str,
+    server: FakeResponses,
+    meeting: Path,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """#63: on Linux every command failed with ``bwrap: execvp …/bin/codex``."""
+    secret = tmp_path / "secret.txt"  # next to the meeting folder, like another meeting
+    secret.write_text("SEGREDO-FORA-DA-REUNIAO\n", encoding="utf-8")
+    server.force.append(shell_call(f"cat transcript.md; cat {secret}; ls {Path.home()}"))
+    brain = brain_for(codex, server, tmp_path, monkeypatch)
+    await brain.start(meeting)
+    await brain.answer(BrainRequest(trigger()))
+    await brain.close()
+    assert brain.last_run is not None
+    output = " ".join(brain.last_run.outputs)
+    assert "bwrap: execvp" not in output
+    assert "o que você acha desse gráfico" in output  # the meeting folder is readable
+    assert "SEGREDO-FORA-DA-REUNIAO" not in output  # a sibling folder is not
+    assert "No such file or directory" in output
+
+
+@pytest.fixture
+def downloads_codex(codex: str, tmp_path_factory: pytest.TempPathFactory) -> Path:
+    """The native binary unpacked into a ``Downloads``-like folder, next to user files."""
+    native = codex_module.codex_read_paths(codex)
+    if not native:
+        pytest.skip("no native codex binary to copy (Linux only)")
+    downloads = tmp_path_factory.mktemp("Downloads")  # not next to the meeting folder
+    shutil.copy2(native[0], downloads / "codex")
+    resources = native[0].parent.parent / "codex-resources"
+    if resources.is_dir():  # the bundled bwrap, for machines without a system one
+        shutil.copytree(resources, downloads / "codex-resources", symlinks=True)
+    (downloads / "notes.txt").write_text("SEGREDO-EM-DOWNLOADS\n", encoding="utf-8")
+    return downloads / "codex"
+
+
+async def test_release_binary_in_a_user_folder_exposes_nothing_next_to_it(
+    downloads_codex: Path,
+    server: FakeResponses,
+    meeting: Path,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Review of #68: a folder grant let the shell read ``~/Downloads/notes.txt``."""
+    notes = downloads_codex.parent / "notes.txt"
+    server.force.append(shell_call(f"cat transcript.md; cat {notes}"))
+    brain = brain_for(str(downloads_codex), server, tmp_path, monkeypatch)
+    await brain.start(meeting)
+    await brain.answer(BrainRequest(trigger()))
+    await brain.close()
+    assert brain.last_run is not None
+    output = " ".join(brain.last_run.outputs)
+    assert "bwrap: execvp" not in output
+    assert "o que você acha desse gráfico" in output
+    assert "SEGREDO-EM-DOWNLOADS" not in output

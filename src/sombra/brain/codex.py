@@ -16,7 +16,9 @@ Every answer is one ``codex exec --json`` process:
   only the meeting folder (plus the OS minimum a shell needs), write nothing and
   reach no network. We don't use ``--sandbox read-only``, because it lets the
   agent read the whole disk (``~/.ssh`` included). A ``--sandbox`` flag would also
-  switch Codex back to the legacy sandbox and silently drop the profile. User config, exec-policy
+  switch Codex back to the legacy sandbox and silently drop the profile. On Linux the
+  profile also reads the native ``codex`` binary file (:func:`codex_read_paths`):
+  Codex re-runs itself inside bubblewrap for every shell command. User config, exec-policy
   rules, ``AGENTS.md``, web search and the image viewer are all off. Every flag
   comes from :func:`build_argv`, and nothing a caller passes can remove them.
 * **Only the shell tool.** Codex's bundled model catalog turns on code mode (a
@@ -47,6 +49,7 @@ import os
 import re
 import shutil
 import signal
+import sys
 import tempfile
 import time
 from collections.abc import Callable, Mapping, Sequence
@@ -154,6 +157,10 @@ class CodexSettings:
     timeout_s: float = 12.0  # whole answer, process start and frame round included
     max_frame_rounds: int = 1  # extra runs to serve a ``PRECISO_DA_TELA fNNNN`` reply
     executable: Sequence[str] = ("codex",)
+    # The Codex CLI whose native binary the Linux sandbox may read (see
+    # :func:`codex_read_paths`). None: ``executable[0]``. Set it when ``executable``
+    # is a wrapper around the real CLI.
+    codex_binary: str | None = None
 
 
 # --- the process seam ----------------------------------------------------------------
@@ -259,13 +266,76 @@ def toml_str(value: str) -> str:
     return "".join(out)
 
 
-def sandbox_args(meeting_dir: Path, model_catalog: Path) -> list[str]:
+def codex_read_paths(
+    command: str,
+    *,
+    platform: str = sys.platform,
+) -> tuple[Path, ...]:
+    """Files the sandbox must read so Codex can start its own shell (#63).
+
+    On Linux, Codex starts every shell command through bubblewrap, and inside it runs
+    its own *native* binary again before the command. That binary must be readable in
+    the sandbox, or every command fails with ``bwrap: execvp …/bin/codex: No such
+    file or directory``: ``:minimal`` mounts only system roots, not an npm prefix
+    (``/opt/…``, ``~/.npm-global``, nvm, pnpm) or wherever a release binary sits.
+
+    ``command`` is resolved like the shell would (``shutil.which`` + ``realpath``).
+    An npm install puts a Node shim on ``PATH`` (``bin/codex.js``); the native binary
+    lives in the platform package (``@openai/codex-linux-<arch>/vendor/<triple>/bin``),
+    nested in the ``codex`` package or next to it (hoisted, pnpm). Node runs only
+    outside the sandbox, so it is not added. The result is the resolved native binary
+    **file**, never its folder: whatever else sits next to it (a release binary in
+    ``~/Downloads``, say) stays unreadable. macOS (Seatbelt) runs the command itself
+    under ``sandbox-exec`` without re-running Codex, so there the result is empty.
+    """
+    if not platform.startswith("linux"):
+        return ()
+    found = shutil.which(command)
+    if found is None:
+        return ()
+    real = Path(os.path.realpath(found))
+    binaries = [real] if not _is_script(real) else _npm_native_binaries(real)
+    paths: list[Path] = []
+    for binary in binaries:
+        path = Path(os.path.realpath(binary))  # a symlinked vendor binary: its target
+        if path.is_file() and not _is_script(path) and path not in paths:
+            paths.append(path)
+    return tuple(paths)
+
+
+def _is_script(path: Path) -> bool:
+    """A ``#!`` script (the npm Node shim) rather than a native binary."""
+    try:
+        with path.open("rb") as f:
+            return f.read(2) == b"#!"
+    except OSError:
+        return False
+
+
+def _npm_native_binaries(shim: Path) -> list[Path]:
+    """The native binaries an npm shim (``<pkg>/bin/codex.js``) can start on Linux."""
+    package = shim.parent.parent
+    places = [package / "node_modules" / "@openai", package / "vendor"]
+    if package.parent.name == "@openai":
+        places.append(package.parent)  # hoisted, or pnpm's sibling symlink
+    found: list[Path] = []
+    for place in places:
+        pattern = "*/bin/codex" if place.name == "vendor" else "codex-linux-*/vendor/*/bin/codex"
+        found += sorted(p for p in place.glob(pattern) if "linux" in p.parent.parent.name)
+    return found
+
+
+def sandbox_args(
+    meeting_dir: Path, model_catalog: Path, codex_files: Sequence[Path] = ()
+) -> list[str]:
     """The confinement flags. Always part of :func:`build_argv`; see the module docstring.
 
     ``model_catalog`` is the file :func:`confine_catalog` produced; see ADR 0018 for the
-    request capture that shows which tool each flag removes.
+    request capture that shows which tool each flag removes. ``codex_files`` are the
+    extra read-only files from :func:`codex_read_paths`.
     """
     folder = toml_str(str(meeting_dir))
+    extra = "".join(f',{toml_str(str(path))}="read"' for path in codex_files)
     p = PERMISSION_PROFILE
     return [
         # Never drop: no session file (C6), and on 0.159.1 it is also why a
@@ -279,7 +349,7 @@ def sandbox_args(meeting_dir: Path, model_catalog: Path) -> list[str]:
         "-c",
         f"default_permissions={toml_str(p)}",
         "-c",
-        f'permissions.{p}.filesystem={{":minimal"="read",{folder}="read"}}',
+        f'permissions.{p}.filesystem={{":minimal"="read",{folder}="read"{extra}}}',
         "-c",
         f"permissions.{p}.network.enabled=false",
         "-c",
@@ -317,10 +387,11 @@ def build_argv(
     developer_instructions: str,
     frames: Sequence[Path],
     model_catalog: Path,
+    codex_files: Sequence[Path] = (),
 ) -> list[str]:
     """The full ``codex exec`` command line. The prompt itself goes on stdin (``-``)."""
     argv = [*settings.executable, "exec", "--json", "--color", "never"]
-    argv += sandbox_args(meeting_dir, model_catalog)
+    argv += sandbox_args(meeting_dir, model_catalog, codex_files)
     argv += ["-c", f"developer_instructions={toml_str(developer_instructions)}"]
     if settings.reasoning_effort is not None:
         argv += ["-c", f"model_reasoning_effort={toml_str(settings.reasoning_effort)}"]
@@ -514,6 +585,7 @@ class CodexBrain:
         self._prefix: PrefixSource | None = None
         self._transcript_offset = 0
         self._catalog_dir: Path | None = None
+        self._codex_files: tuple[Path, ...] = ()
         self._lock = asyncio.Lock()
         self.last_run: CodexRun | None = None  # the last process's events, for audit
 
@@ -536,6 +608,7 @@ class CodexBrain:
         tools = MeetingTools(meeting_dir)
         await self._check_version(tools.root)
         await self._write_catalog(tools.root)
+        self._codex_files = codex_read_paths(s.codex_binary or s.executable[0])
         self._tools = tools
         system = self._prompt.system_prompt(s.user_name, s.aliases, s.allowed_topics, s.level)
         self._prefix = self._prompt.prefix_builder(self._tools.root, system)
@@ -689,7 +762,9 @@ class CodexBrain:
             raise BrainError(f"could not build the prompt tail: {e}") from None
         req = self._prompt.render_request(prefix, tail, model=s.model or "", max_tokens=0)
         developer, prompt = flatten_request(req)
-        argv = build_argv(s, self.meeting_dir, developer, frames, self.model_catalog)
+        argv = build_argv(
+            s, self.meeting_dir, developer, frames, self.model_catalog, self._codex_files
+        )
         remaining = deadline - time.monotonic()
         if remaining <= 0:
             raise BrainTimeoutError(f"no answer within {s.timeout_s:g} s")
