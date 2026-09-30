@@ -194,7 +194,7 @@ jobs:
           path: artifact
       - name: Install and uninstall the release cask
         if: env.ZIP_URL == ''
-        # The cask as it will go to the tap: downloads the real, notarized release asset.
+        # The cask exactly as it will go to the tap: downloads the real release asset.
         run: sh packaging/homebrew/ci.sh smoke artifact/sombra.rb "$VERSION"
       - name: Install and uninstall a given zip from a local file URL
         if: env.ZIP_URL != ''
@@ -220,38 +220,51 @@ jobs:
     env:
       VERSION: ${{ needs.resolve.outputs.version }}
       DRY_RUN: ${{ needs.resolve.outputs.dry_run }}
-      TAP_TOKEN: ${{ secrets.HOMEBREW_TAP_TOKEN }}
+      # Only whether the secret exists. The token itself goes to the two steps that
+      # clone and push the tap, and never to a pull_request run.
+      HAVE_TOKEN: ${{ github.event_name != 'pull_request' && secrets.HOMEBREW_TAP_TOKEN != '' }}
     steps:
       - name: Token present?
         id: token
         run: |
-          if [ -n "$TAP_TOKEN" ]; then
-            echo "have=true" >> "$GITHUB_OUTPUT"
-          elif [ "$DRY_RUN" = true ]; then
-            echo "have=false" >> "$GITHUB_OUTPUT"
-            echo "::notice::No HOMEBREW_TAP_TOKEN: the dry run diffs against the public tap."
+          if [ "$DRY_RUN" = true ]; then
+            echo "run=true" >> "$GITHUB_OUTPUT"
+            echo "::notice::Dry run: diffing against the public tap; nothing is pushed."
+          elif [ "$HAVE_TOKEN" = true ]; then
+            echo "run=true" >> "$GITHUB_OUTPUT"
           else
-            echo "have=false" >> "$GITHUB_OUTPUT"
+            echo "run=false" >> "$GITHUB_OUTPUT"
             echo "::notice::HOMEBREW_TAP_TOKEN is not set; the tap was not updated (see docs/release.md#homebrew-tap)."
           fi
       - uses: actions/checkout@v4
-        if: steps.token.outputs.have == 'true' || env.DRY_RUN == 'true'
+        if: steps.token.outputs.run == 'true'
+        with:
+          persist-credentials: false # no GITHUB_TOKEN header to clash with the tap's
       - uses: astral-sh/setup-uv@v6
-        if: steps.token.outputs.have == 'true' || env.DRY_RUN == 'true'
+        if: steps.token.outputs.run == 'true'
       - uses: actions/download-artifact@v4
-        if: steps.token.outputs.have == 'true' || env.DRY_RUN == 'true'
+        if: steps.token.outputs.run == 'true'
         with:
           name: homebrew-cask
           path: artifact
       - name: Check out the tap
-        if: steps.token.outputs.have == 'true' || env.DRY_RUN == 'true'
+        if: steps.token.outputs.run == 'true'
+        env:
+          TAP_TOKEN: ${{ env.DRY_RUN != 'true' && secrets.HOMEBREW_TAP_TOKEN || '' }}
         run: |
+          url="https://github.com/${TAP_REPO}.git"
           if [ -n "$TAP_TOKEN" ]; then
-            url="https://x-access-token:${TAP_TOKEN}@github.com/${TAP_REPO}.git"
+            # An auth header for this one command: the token never lands in tap/.git/config.
+            auth=$(printf 'x-access-token:%s' "$TAP_TOKEN" | base64 | tr -d '\n')
+            echo "::add-mask::$auth"
+            ok=true
+            git -c "http.https://github.com/.extraheader=AUTHORIZATION: basic $auth" \
+              clone --depth 1 "$url" tap 2>/dev/null || ok=false
           else
-            url="https://github.com/${TAP_REPO}.git"
+            ok=true
+            git clone --depth 1 "$url" tap 2>/dev/null || ok=false
           fi
-          if ! git clone --depth 1 "$url" tap 2>/dev/null; then
+          if [ "$ok" = false ]; then
             if [ "$DRY_RUN" != true ]; then
               echo "::error::Cannot clone $TAP_REPO with HOMEBREW_TAP_TOKEN (see docs/release.md#homebrew-tap)."
               exit 1
@@ -261,7 +274,7 @@ jobs:
           fi
       - name: Write Casks/sombra.rb (diff below)
         id: bump
-        if: steps.token.outputs.have == 'true' || env.DRY_RUN == 'true'
+        if: steps.token.outputs.run == 'true'
         run: |
           dry=""
           [ "$DRY_RUN" = true ] && dry="--dry-run"
@@ -270,12 +283,16 @@ jobs:
             --version "$VERSION" --sums artifact/SHA256SUMS --tap-dir tap \
             --github-output "$GITHUB_OUTPUT"
       - name: Push to the tap
-        if: steps.token.outputs.have == 'true' && env.DRY_RUN != 'true' && steps.bump.outputs.changed == 'true'
+        if: steps.token.outputs.run == 'true' && env.DRY_RUN != 'true' && steps.bump.outputs.changed == 'true'
         working-directory: tap
+        env:
+          TAP_TOKEN: ${{ secrets.HOMEBREW_TAP_TOKEN }}
         run: |
+          auth=$(printf 'x-access-token:%s' "$TAP_TOKEN" | base64 | tr -d '\n')
+          echo "::add-mask::$auth"
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
           git add Casks/sombra.rb
           git commit -m "sombra $VERSION" -m "From $GITHUB_SERVER_URL/$GITHUB_REPOSITORY/releases/tag/v$VERSION"
-          git push origin HEAD
+          git -c "http.https://github.com/.extraheader=AUTHORIZATION: basic $auth" push origin HEAD
           echo "::notice::Pushed sombra $VERSION to $TAP_REPO."

@@ -69,7 +69,7 @@ On macOS, grant Microphone, Screen Recording and Accessibility to the terminal a
 
 ## Homebrew tap
 
-`brew install --cask nickmaglowsch/sombra/sombra` installs the signed `Sombra.app` (#51), so the macOS permissions belong to Sombra. The cask lives in the tap repository `nickmaglowsch/homebrew-sombra`. It is rendered from `packaging/homebrew/sombra.rb.tmpl` and needs the release asset `Sombra-<version>-macos-arm64.zip` from #50, listed in `SHA256SUMS`. A release without that zip gets no cask: the Homebrew workflow fails instead of falling back to the wheel. homebrew-core is out of reach, because its policy builds from source and onnxruntime publishes no sdist ([ADR 0044](adr/0044-release-packaging.md)).
+`brew install --cask nickmaglowsch/sombra/sombra` installs `Sombra.app` (#51), so the macOS permissions belong to Sombra. The app is self-signed and not notarized by Apple: the owner decided against a paid Apple Developer account (#50). The cask's caveats and the tap README say so. The cask lives in the tap repository `nickmaglowsch/homebrew-sombra`. It is rendered from `packaging/homebrew/sombra.rb.tmpl` and needs the release asset `Sombra-<version>-macos-arm64.zip` from #50, listed in `SHA256SUMS`. A release without that zip gets no cask: the Homebrew workflow fails instead of falling back to the wheel. homebrew-core is out of reach, because its policy builds from source and onnxruntime publishes no sdist ([ADR 0044](adr/0044-release-packaging.md)).
 
 ### One-time setup (owner)
 
@@ -95,7 +95,7 @@ The **Homebrew** workflow (`.github/workflows/homebrew.yml`) runs when the Relea
 
 1. **resolve**: skips pre-releases. The tap only gets final versions.
 2. **validate** (macos-14): downloads the release's `SHA256SUMS` and renders the cask with `packaging/homebrew/cask.py render`. It then runs `brew style` and `brew audit --cask --strict` on it, from a throwaway local tap.
-3. **smoke** (macos-14): `brew install --cask` from the real release URL, then `sombra --version`, which must print the version. Then `brew uninstall --cask --zap`, which must leave `~/Sombra/meetings` intact.
+3. **smoke** (macos-14): `brew install --cask` from the real release URL (the cask exactly as it will go to the tap), then `sombra --version`, which must print the version. Then `brew uninstall --cask --zap`, which must leave `~/Sombra/meetings` intact.
 4. **bump**: clones the tap with the token and runs `cask.py bump`. It commits `Casks/sombra.rb` as `sombra X.Y.Z` and pushes. An unchanged cask pushes nothing. A patch to an older line (`v0.2.1` after `v0.3.0`) never downgrades the tap.
 
 PRs that touch `packaging/homebrew/` run **validate** against a fake `SHA256SUMS`, plus the bump as a dry run that prints its diff. By hand (Actions > Homebrew > Run workflow):

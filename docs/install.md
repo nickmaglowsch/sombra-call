@@ -16,13 +16,15 @@ On Ubuntu, live capture (microphone, system audio, screen) is not built yet ([AD
 
 ## Homebrew (macOS)
 
-On macOS you can install the signed `Sombra.app` with Homebrew instead:
+On macOS you can install `Sombra.app` with Homebrew instead:
 
 ```sh
 brew install --cask nickmaglowsch/sombra/sombra
 ```
 
-This installs `Sombra.app` into `/Applications` and links the `sombra` command, which runs through the app. Microphone, Screen Recording and Accessibility are then granted to **Sombra**, not to your terminal. Homebrew prints the next steps: `sombra doctor`, `sombra models download`, grant the permissions to Sombra, then `sombra setup`. It needs macOS 14+ on Apple Silicon, like the installer.
+This installs `Sombra.app` into `/Applications` and links the `sombra` command, which runs through the app. Microphone, Screen Recording and Accessibility are then granted to **Sombra**, not to your terminal. `Sombra.app` is signed with the project's own self-signed certificate and is **not notarized by Apple**, because Sombra has no paid Apple Developer account (#50). The zip is checked against the release's `SHA256SUMS`. If macOS says it cannot check the app, open System Settings > Privacy & Security and click **Open Anyway** for Sombra.
+
+Homebrew prints the next steps: `sombra doctor`, `sombra models download`, grant the permissions to Sombra, then `sombra setup`. It needs macOS 14+ on Apple Silicon, like the installer.
 
 - **Upgrade:** `brew upgrade --cask sombra`.
 - **Uninstall:** `brew uninstall --cask sombra` keeps your config and models. `brew uninstall --cask --zap sombra` also deletes `~/.config/sombra` and `~/.cache/sombra`. Neither ever deletes your meetings in `~/Sombra/meetings`.

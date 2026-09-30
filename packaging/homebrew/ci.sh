@@ -7,8 +7,9 @@
 # Recent Homebrew only audits and installs casks that live in a tap, so both put the
 # rendered file in a throwaway local tap (sombra-ci/local) and remove it afterwards.
 # smoke also proves that `brew uninstall --zap` leaves ~/Sombra/meetings alone.
-# Set SOMBRA_SMOKE_ADHOC=1 for an ad-hoc signed app (a PR build): the quarantine flag is
-# then cleared, since Gatekeeper only accepts a Developer ID signed, notarized app.
+# SOMBRA_SMOKE_ADHOC=1 is for a zip given by hand (workflow_dispatch app_zip_url), such as
+# an ad-hoc signed PR build: this throwaway CI install then clears the quarantine flag, since
+# Gatekeeper refuses an unnotarized app while it is quarantined. It never runs for users.
 set -eu
 
 TAP=sombra-ci/local

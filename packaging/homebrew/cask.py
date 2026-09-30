@@ -1,8 +1,8 @@
 """Render the Homebrew cask for ``Sombra.app`` and bump it in the tap (issue #51).
 
-The cask installs the signed ``Sombra.app`` that the release workflow publishes as
-``Sombra-<version>-macos-arm64.zip`` (issue #50), checked against the release's
-``SHA256SUMS``::
+The cask installs the self-signed, not notarized ``Sombra.app`` that the release
+workflow publishes as ``Sombra-<version>-macos-arm64.zip`` (issue #50), checked against
+the release's ``SHA256SUMS``::
 
     python packaging/homebrew/cask.py render --version v0.3.0 --sums SHA256SUMS
     python packaging/homebrew/cask.py render --version 0.3.0 --zip S.zip --url file:///…/S.zip
@@ -43,6 +43,10 @@ _FINAL = re.compile(r"^v?(?P<v>(?:0|[1-9]\d*)\.(?:0|[1-9]\d*)\.(?:0|[1-9]\d*))$"
 # Any version Homebrew accepts in a string, for a local smoke test of a pre-release zip.
 _ANY = re.compile(r"^v?(?P<v>[0-9][0-9A-Za-z.\-]*)$")
 _SHA256 = re.compile(r"^[0-9a-f]{64}$")
+# What may go inside the cask's double-quoted Ruby strings: no quote, backslash or `#`,
+# so nothing can close the string or interpolate (`#{…}`) Ruby code.
+_SAFE_VERSION = re.compile(r"[0-9][0-9A-Za-z.\-]*")
+_SAFE_URL = re.compile(r"(?:https|file)://[A-Za-z0-9._~/%:+@-]+")
 _CASK_VERSION = re.compile(r'^\s*version\s+"(?P<v>[^"]+)"', re.MULTILINE)
 _PLACEHOLDER = re.compile(r"@@[A-Z0-9_]+@@")
 
@@ -109,9 +113,10 @@ def render(version: str, sha256: str, *, url: str = DEFAULT_URL, template: Path 
     """The cask text. ``url`` defaults to the GitHub release asset for ``version``."""
     if not _SHA256.match(sha256):
         raise CaskError(f"{sha256!r} is not a SHA-256 hex digest")
-    for field, value in (("version", version), ("url", url)):
-        if '"' in value or "\\" in value or "\n" in value:
-            raise CaskError(f"{field} {value!r} cannot go in a Ruby string")
+    if not _SAFE_VERSION.fullmatch(version):
+        raise CaskError(f"version {version!r} cannot go in the cask")
+    if url != DEFAULT_URL and not _SAFE_URL.fullmatch(url):
+        raise CaskError(f"url {url!r} cannot go in the cask (https:// or file://, no # or quotes)")
     text = template.read_text(encoding="utf-8")
     for key, value in {"VERSION": version, "SHA256": sha256, "URL": url, "SHIM": SHIM}.items():
         text = text.replace(f"@@{key}@@", value)

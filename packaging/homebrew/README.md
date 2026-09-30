@@ -1,6 +1,6 @@
 # Homebrew packaging
 
-`brew install --cask nickmaglowsch/sombra/sombra` installs the signed `Sombra.app` (issue #51). The setup and release flow are in [docs/release.md](../../docs/release.md#homebrew-tap).
+`brew install --cask nickmaglowsch/sombra/sombra` installs `Sombra.app` (issue #51). The app is self-signed and not notarized by Apple (#50). The setup and release flow are in [docs/release.md](../../docs/release.md#homebrew-tap).
 
 | File | What |
 | --- | --- |

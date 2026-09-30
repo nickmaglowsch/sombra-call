@@ -161,6 +161,14 @@ def test_caveats_give_the_next_steps() -> None:
     assert "~/Sombra/meetings are never removed" in text
 
 
+def test_caveats_say_plainly_the_app_is_not_notarized() -> None:
+    text = render("0.3.0", ZIP_SHA)
+    assert "self-signed and not notarized by Apple" in text
+    assert '"Open Anyway"' in text
+    assert "Developer ID" not in text
+    assert "notarized app" not in text
+
+
 def test_render_takes_a_file_url_for_a_local_zip() -> None:
     text = render("0.3.0-rc1", ZIP_SHA, url="file:///tmp/Sombra.zip")
     assert 'url "file:///tmp/Sombra.zip"' in text
@@ -175,11 +183,23 @@ def test_render_takes_a_file_url_for_a_local_zip() -> None:
         ('0.3.0" do evil', ZIP_SHA, DEFAULT_URL),
         ("0.3.0", ZIP_SHA, 'file:///x"; system "rm'),
         ("0.3.0", ZIP_SHA, "file:///x\\"),
+        ("0.3.0", ZIP_SHA, 'https://example.com/#{system("id")}.zip'),
+        ("0.3.0", ZIP_SHA, "https://example.com/a.zip#frag"),
+        ("0.3.0", ZIP_SHA, "http://example.com/a.zip"),
+        ("0.3.0", ZIP_SHA, "ftp://example.com/a.zip"),
+        ("0.3.0", ZIP_SHA, "file:///a b.zip"),
+        ("#{1}", ZIP_SHA, DEFAULT_URL),
+        ("v0.3.0", ZIP_SHA, DEFAULT_URL),
     ],
 )
 def test_render_refuses_values_that_break_the_ruby(version: str, sha: str, url: str) -> None:
     with pytest.raises(CaskError):
         render(version, sha, url=url)
+
+
+def test_render_accepts_the_urls_the_workflow_uses() -> None:
+    for url in ("file:///Users/runner/work/_temp/Sombra.zip", "https://example.com/S-1.0.zip"):
+        assert f'url "{url}"' in render("0.3.0", ZIP_SHA, url=url)
 
 
 def test_render_refuses_a_template_with_unknown_placeholders(tmp_path: Path) -> None:

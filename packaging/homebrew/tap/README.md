@@ -1,10 +1,12 @@
 # Homebrew tap for Sombra
 
-This is the Homebrew tap for [Sombra](https://github.com/nickmaglowsch/sombra-call), a local meeting agent. It holds a single cask that installs the signed and notarized `Sombra.app` from the project's GitHub Releases. The cask needs macOS 14 (Sonoma) or later on Apple Silicon.
+This is the Homebrew tap for [Sombra](https://github.com/nickmaglowsch/sombra-call), a local meeting agent. It holds a single cask that installs `Sombra.app` from the project's GitHub Releases. The cask needs macOS 14 (Sonoma) or later on Apple Silicon.
 
 ```sh
 brew install --cask nickmaglowsch/sombra/sombra
 ```
+
+**Not notarized.** Sombra has no paid Apple Developer account, so `Sombra.app` is signed with the project's own self-signed certificate and is not notarized by Apple. The certificate is the same on every release, which is why the permissions you grant persist across upgrades. The download is checked against the release's `SHA256SUMS`. If macOS says it cannot check the app, open System Settings > Privacy & Security and click **Open Anyway** for Sombra.
 
 Then follow the caveats Homebrew prints:
 
