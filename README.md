@@ -92,7 +92,7 @@ sombra ask latest "O que combinamos sobre o prazo?"
 
 `sombra setup` finds the `claude` / `codex` CLIs and offers to install one, checks its login with the CLI's own status command and offers the CLI's own login flow (Sombra never sees the token), or stores an API key in the OS keychain. It then writes the choice to `config.toml` without touching your other settings and asks one test question. How each option is billed, what happens at a usage limit, and the Codex residual risk are in [`docs/providers.md`](docs/providers.md).
 
-Re-run the installer to upgrade; `--uninstall` removes it and never touches `~/Sombra/meetings`. On Ubuntu, live capture is not built yet, but `replay`, `ask`, `minutes` and `report` work. Options and details: [`docs/install.md`](docs/install.md); day-to-day use: [`docs/usage.md`](docs/usage.md).
+On macOS the installer puts `Sombra.app` in Applications, signed with the project's own certificate, so macOS asks for the permissions as Sombra rather than your terminal (`--no-app` keeps the uv install). Re-run the installer to upgrade; `--uninstall` removes it and never touches `~/Sombra/meetings`. On Ubuntu, live capture is not built yet, but `replay`, `ask`, `minutes` and `report` work. Options and details: [`docs/install.md`](docs/install.md); day-to-day use: [`docs/usage.md`](docs/usage.md).
 
 ## Development
 

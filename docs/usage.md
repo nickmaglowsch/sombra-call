@@ -25,7 +25,7 @@ aliases = ["Mari"]        # other names people call you; they also go in Whisper
 
 ## Permissions (macOS)
 
-Grant these to the app you run `sombra` from (Terminal, iTerm, VS Code…) in **System Settings → Privacy & Security**. Restart that app after granting.
+With the default install (`Sombra.app`), macOS asks for these **for Sombra** the first time they are needed, and lists Sombra in **System Settings → Privacy & Security**. The grants stay across upgrades ([ADR 0050](adr/0050-macos-app-bundle.md)). With the uv install (`install.sh --no-app`), grant them to the app you run `sombra` from (Terminal, iTerm, VS Code…) and restart that app after granting. `sombra doctor` names the app that holds them ("permissions holder").
 
 | Permission | Why |
 | --- | --- |
