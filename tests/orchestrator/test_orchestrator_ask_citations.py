@@ -25,7 +25,12 @@ from sombra.contracts import BrainRequest, BrainResponse
 from sombra.orchestrator import ask as ask_mod
 from sombra.orchestrator import commands
 from sombra.orchestrator.ask import FramelessView, ask, ask_prompt_kit, claude_code_brain
-from sombra.orchestrator.citations import check_citations, clock_hint, transcript_times
+from sombra.orchestrator.citations import (
+    CheckedAnswer,
+    check_citations,
+    clock_hint,
+    transcript_times,
+)
 
 KNOWN = {"14:30:05", "14:30:40", "14:31:02", "14:31:20", "14:32:10", "14:33:00"}
 
@@ -63,9 +68,48 @@ def test_invented_citation_mid_sentence_keeps_one_space() -> None:
         ("sexta [00:00:00 e 14:31:20].", "sexta [14:31:20]."),
         ("sexta [14:30:05–14:31:02].", "sexta [14:30:05–14:31:02]."),
         ("sexta [14:30:05 – 23:59:59].", "sexta [14:30:05]."),
+        ("sexta [00:00:00-14:33:00].", "sexta [14:33:00]."),  # a range keeps its real end
+        ("sexta [14:30:05, 00:00:00, 14:31:02].", "sexta [14:30:05, 14:31:02]."),
     ],
 )
 def test_multi_time_brackets_keep_only_real_times(text: str, expected: str) -> None:
+    assert check_citations(text, KNOWN).text == expected
+
+
+@pytest.mark.parametrize(
+    ("text", "expected"),
+    [
+        # --frames asks the model to cite the screen id next to the time
+        ("a tela [00:00:00, f0003] b", "a tela [f0003] b"),
+        ("a tela [00:00:00 f0003] b", "a tela [f0003] b"),
+        ("a tela [00:00:00 TELA f0003] b", "a tela [TELA f0003] b"),
+        ("a tela [00:00:00 – TELA] b", "a tela b"),
+        ("a tela [14:31:02, 00:00:00, f0003] b", "a tela [14:31:02, f0003] b"),
+    ],
+)
+def test_brackets_with_a_frame_id_are_citations_too(text: str, expected: str) -> None:
+    checked = check_citations(text, KNOWN)
+    assert checked.text == expected
+    assert checked.dropped == ("00:00:00",)
+
+
+@pytest.mark.parametrize(
+    "text", ["a tela [14:32:10, f0001] b", "a tela [14:32:10 f0001] b", "[14:32:10 – TELA]"]
+)
+def test_valid_brackets_with_a_frame_id_are_unchanged(text: str) -> None:
+    assert check_citations(text, KNOWN) == CheckedAnswer(text, ())
+
+
+@pytest.mark.parametrize(
+    ("text", "expected"),
+    [
+        ("Não está **[00:00:00]**.", "Não está."),
+        ("Não está _[00:00:00]_ aqui.", "Não está aqui."),
+        ("Beta **[00:00:00, 14:31:02]**.", "Beta **[14:31:02]**."),
+        ("Beta **[14:31:02]**.", "Beta **[14:31:02]**."),
+    ],
+)
+def test_emphasis_around_a_dropped_citation_goes_too(text: str, expected: str) -> None:
     assert check_citations(text, KNOWN).text == expected
 
 
@@ -78,6 +122,12 @@ def test_same_rule_as_the_minutes_normalizes_hours() -> None:
 def test_non_citations_are_left_alone() -> None:
     text = "Às 00:00:00 nada; veja [link](x) e [TELA f0001] e [nota]."
     assert check_citations(text, KNOWN).text == text
+
+
+def test_link_text_with_an_invented_time_is_checked() -> None:
+    assert check_citations("veja [00:00:00](x) e [14:31:02](y)", KNOWN).text == (
+        "veja(x) e [14:31:02](y)"
+    )
 
 
 def test_empty_transcript_leaves_no_citation() -> None:

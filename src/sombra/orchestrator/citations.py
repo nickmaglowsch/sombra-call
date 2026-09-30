@@ -6,13 +6,22 @@ a time is real when :func:`~sombra.summary.minutes.normalize_hms` of it is the
 ``HH:MM:SS`` of a line :func:`~sombra.summary.transcript.read_transcript` parses, speech
 and ``TELA`` lines alike.
 
-An invalid citation is **dropped**, as the minutes drop an action item with an invented
-time. Replacing it with the nearest real time would print a precise-looking source the
-model never chose, and marking it would still show the user a time that does not exist.
-A bracket that cites several times (``[14:30:05, 00:00:00]``) keeps its real ones; a
-bracket with no real time is removed with one of the spaces around it. Brackets whose times are
-all real are left byte for byte as the model wrote them. Only bracketed times are
-citations; a time written in prose (``às 14h30``) is left alone.
+A citation is any ``[...]`` holding a time, including the ones that also name a screen,
+as the ``--frames`` prompt asks (``[14:32:10, f0001]``), and link text
+(``[00:00:00](...)``); ``[TELA f0001]`` is not one. An invalid time is **dropped**, as
+the minutes drop an action item with an invented time. Replacing it with the nearest
+real time would print a precise-looking source the model never chose, and marking it
+would still show the user a time that does not exist.
+
+- A bracket whose times are all real is left byte for byte as the model wrote it.
+- Otherwise each invalid time goes with its separator and the rest stays:
+  ``[14:30:05, 00:00:00]`` -> ``[14:30:05]``, ``[00:00:00, f0003]`` -> ``[f0003]``. A
+  range with one invalid end keeps the real end only (``[00:00:00-14:33:00]`` ->
+  ``[14:33:00]``): a point the transcript has, rather than a range it does not.
+- A bracket left with no time and no frame id (``[00:00:00]``, ``[00:00:00 TELA]``) is
+  removed with one of the spaces around it, and with emphasis around it (``**[..]**``).
+
+Only bracketed times are citations; a time written in prose (``às 14h30``) is left alone.
 """
 
 from __future__ import annotations
@@ -26,14 +35,17 @@ from pathlib import Path
 from sombra.summary.minutes import normalize_hms
 from sombra.summary.transcript import read_transcript
 
-_TIME = r"\d{1,2}:\d{2}:\d{2}"
-_TIME_RE = re.compile(_TIME)
-# A bracket holding one or more times, joined by commas, dashes or "e"/"a"/"até".
-_CITATION_RE = re.compile(
-    rf"(?P<space>[ \t]*)"
-    rf"\[(?P<inner>\s*{_TIME}(?:\s*(?:[,;–—-]|e|a|até)\s*{_TIME})*\s*)\]"
-    r"(?P<after>[ \t]?)"
+_TIME_RE = re.compile(r"\d{1,2}:\d{2}:\d{2}")
+_FRAME_RE = re.compile(r"f\d{4,}")  # contracts.timeline.FRAME_ID_RE, unanchored
+# One bracket (no nesting, one line), with the space and emphasis
+# around it so a dropped citation leaves neither "x ." nor "****" behind.
+_BRACKET_RE = re.compile(
+    r"(?P<space>[ \t]*)(?P<em>\*\*|__|\*|_|`)?"
+    r"\[(?P<inner>[^\[\]\n]*)\]"
+    r"(?(em)(?P=em))(?P<after>[ \t]?)"
 )
+# What joins the items of a citation: punctuation, "e"/"a"/"até", or plain spaces.
+_SEP_RE = re.compile(r"(\s*[,;–—]\s*|\s*(?<=\d)-(?=\d)\s*|\s+-\s+|\s+(?:e|a|até)\s+|\s+)")
 
 
 @dataclass(frozen=True, slots=True)
@@ -55,17 +67,33 @@ def check_citations(text: str, known: set[str]) -> CheckedAnswer:
     """``text`` with every cited time that is not in ``known`` dropped."""
     dropped: list[str] = []
 
-    def fix(m: re.Match[str]) -> str:
-        times = _TIME_RE.findall(m["inner"])
-        real = [t for t in times if normalize_hms(t) in known]
-        dropped.extend(t for t in times if normalize_hms(t) not in known)
-        if len(real) == len(times):
-            return m[0]
-        if not real:  # drop one of the spaces around it, not both
-            return m["after"] if m["space"] else ""
-        return f"{m['space']}[{', '.join(real)}]{m['after']}"
+    def invalid(item: str) -> list[str]:
+        return [t for t in _TIME_RE.findall(item) if normalize_hms(t) not in known]
 
-    checked = _CITATION_RE.sub(fix, text)
+    def fix(m: re.Match[str]) -> str:
+        inner = m["inner"]
+        if not _TIME_RE.search(inner):
+            return m[0]  # not a citation
+        parts = _SEP_RE.split(inner.strip())
+        items, seps = parts[0::2], parts[1::2]
+        bad = [invalid(item) for item in items]
+        if not any(bad):
+            return m[0]
+        for times in bad:
+            dropped.extend(times)
+        kept = ""
+        for i, item in enumerate(items):
+            if bad[i]:
+                continue
+            if kept:  # the separator right before this item joins it to what is kept
+                kept += seps[i - 1] if i > 0 and not bad[i - 1] else ", "
+            kept += item
+        if not (_TIME_RE.search(kept) or _FRAME_RE.search(kept)):
+            return m["after"] if m["space"] else ""  # one of the spaces around it, not both
+        em = m["em"] or ""
+        return f"{m['space']}{em}[{kept}]{em}{m['after']}"
+
+    checked = _BRACKET_RE.sub(fix, text)
     return CheckedAnswer(checked, tuple(dropped))
 
 
