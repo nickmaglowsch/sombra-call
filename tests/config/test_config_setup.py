@@ -224,7 +224,7 @@ def test_missing_cli_declined_writes_the_choice_and_says_what_is_left(cfg_path: 
     assert _setup(cfg_path, m) == 1
     assert m.clis.interactive == [] and m.smoked == []
     assert load_user_config(cfg_path).brain == BrainConfig("codex", "subscription")
-    assert "npm install -g @openai/codex" in m.text and "Left to do" in m.text
+    assert "npm install -g @openai/codex@0.159.1" in m.text and "Left to do" in m.text
 
 
 def test_install_that_does_not_land_on_path(cfg_path: Path) -> None:
@@ -243,6 +243,13 @@ def test_old_cli_update_offered(cfg_path: Path, answer: str, code: int) -> None:
         assert m.clis.interactive == [["sh", "-c", "claude update"]]
     else:
         assert "`claude update`" in m.text and m.clis.interactive == []
+
+
+def test_codex_newer_than_verified_is_pinned_back(cfg_path: Path) -> None:
+    m = Machine(clis=FakeClis(codex=Cli("0.161.0")), answers=["3", "", "y"])
+    assert _setup(cfg_path, m) == 0
+    assert "newer than 0.159.1" in m.text
+    assert m.clis.interactive == [["sh", "-c", "npm install -g @openai/codex@0.159.1"]]
 
 
 @pytest.mark.parametrize(("answer", "code"), [("y", 0), ("", 1)])

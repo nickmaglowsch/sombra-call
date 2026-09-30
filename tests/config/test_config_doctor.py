@@ -290,7 +290,7 @@ def test_agent_claude_code_problems(
 
 
 def test_agent_codex_subscription_never_echoes_the_status_output(tmp_path: Path) -> None:
-    clis = FakeClis(codex=Cli("0.160.0", "api-key"))
+    clis = FakeClis(codex=Cli("0.159.1", "api-key"))
     p = _probes(
         tmp_path,
         brain=BrainConfig("codex", "subscription"),
@@ -302,6 +302,28 @@ def test_agent_codex_subscription_never_echoes_the_status_output(tmp_path: Path)
     assert checks["codex login"].status is Status.WARN  # billed to the API, not ChatGPT
     assert "openai API key" not in checks  # a subscription never looks at the key
     assert MASKED_KEY not in render_text(run_checks(p))
+
+
+def test_codex_newer_than_verified_fails_for_the_agent_only(tmp_path: Path) -> None:
+    clis = FakeClis(codex=Cli("0.160.0"))
+    agent = _agent_checks(
+        _probes(
+            tmp_path, brain=BrainConfig("codex", "subscription"), which=clis.which, run=clis.run
+        )
+    )
+    assert agent["codex CLI"].status is Status.FAIL
+    assert "newer than 0.159.1" in agent["codex CLI"].detail
+    assert agent["codex CLI"].fix == "`npm install -g @openai/codex@0.159.1`"
+    summaries_only = _agent_checks(
+        _probes(
+            tmp_path,
+            brain=BrainConfig("claude-code"),
+            summary_backend="codex",
+            which=clis.which,
+            run=clis.run,
+        )
+    )
+    assert summaries_only["codex CLI"].status is Status.OK  # the text model has no cap
 
 
 def test_agent_codex_api_key_summaries_need_the_login(tmp_path: Path) -> None:

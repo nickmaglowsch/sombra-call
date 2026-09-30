@@ -27,12 +27,17 @@ from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass
 from enum import StrEnum
 
+from sombra.brain.claude_code import MIN_CLI_VERSION as CLAUDE_CODE_MIN
+from sombra.brain.codex import MAX_TESTED_CLI_VERSION as CODEX_MAX_TESTED
+from sombra.brain.codex import MIN_CLI_VERSION as CODEX_MIN
 from sombra.config.schema import AUTH_API_KEY, AUTH_SUBSCRIPTION, BrainConfig
 
-# Same floors as brain.claude_code / brain.codex and summary.cli_models (ADR 0046, 0018):
-# an older CLI is refused at run time, so setup and doctor refuse it first.
-CLAUDE_MIN_VERSION = (2, 1, 285)
-CODEX_MIN_VERSION = (0, 159, 1)
+# The versions the backends accept (ADR 0046, 0018): an older CLI is refused at run time,
+# and so is a Codex CLI newer than the last one whose tool set was verified (#57), so
+# setup and doctor refuse them first. Imported, so the two can never disagree.
+CLAUDE_MIN_VERSION = CLAUDE_CODE_MIN
+CODEX_MIN_VERSION = CODEX_MIN
+CODEX_MAX_AGENT_VERSION = CODEX_MAX_TESTED
 STATUS_TIMEOUT_S = 20.0
 
 _BASE_ENV = ("PATH", "HOME", "USER", "LOGNAME", "LANG", "LC_ALL", "LC_CTYPE", "TMPDIR")
@@ -46,12 +51,15 @@ class CliSpec:
     label: str
     min_version: tuple[int, int, int]
     install: str  # official install command (a shell line), run only with consent
-    update: str  # shell line that updates an old CLI
+    update: str  # shell line that brings an unsupported version to a supported one
     docs: str
     status: tuple[str, ...]  # argv after the executable
     login: tuple[str, ...]
     env: tuple[str, ...]  # passed through to the status command (no API keys)
     login_hint: str  # what to run by hand
+    # The agent refuses newer CLIs (Codex: tool set verified per version, ADR 0018 #57).
+    # Summaries don't: the text model has its own confinement (ADR 0046).
+    max_agent_version: tuple[int, int, int] | None = None
 
 
 CLAUDE = CliSpec(
@@ -70,13 +78,14 @@ CODEX = CliSpec(
     name="codex",
     label="Codex CLI",
     min_version=CODEX_MIN_VERSION,
-    install="npm install -g @openai/codex",
-    update="npm install -g @openai/codex@latest",
+    install=f"npm install -g @openai/codex@{'.'.join(map(str, CODEX_MAX_TESTED))}",
+    update=f"npm install -g @openai/codex@{'.'.join(map(str, CODEX_MAX_TESTED))}",
     docs="https://github.com/openai/codex",
     status=("login", "status"),
     login=("login",),
     env=(*_BASE_ENV, "CODEX_HOME"),
     login_hint="codex login  (or `codex login --device-auth` on a machine without a browser)",
+    max_agent_version=CODEX_MAX_TESTED,
 )
 CLIS = {"claude-code": CLAUDE, "codex": CODEX}
 
@@ -148,8 +157,24 @@ class CliState:
     def installed(self) -> bool:
         return self.path is not None
 
-    def new_enough(self, spec: CliSpec) -> bool:
-        return self.version is not None and self.version >= spec.min_version
+    def problem(self, spec: CliSpec, *, agent: bool) -> str | None:
+        """Why this version can't be used (for the agent, or only for summaries), or None."""
+        need = f"Sombra needs {version_str(spec.min_version)} or newer"
+        if self.version is None:
+            return f"unreadable version; {need}"
+        found = version_str(self.version)
+        if self.version < spec.min_version:
+            return f"{found}; {need}"
+        top = spec.max_agent_version
+        if agent and top is not None and self.version > top:
+            return (
+                f"{found} is newer than {version_str(top)}, the last version whose tool set "
+                "was verified; the agent refuses it (ADR 0018)"
+            )
+        return None
+
+    def usable(self, spec: CliSpec, *, agent: bool) -> bool:
+        return self.path is not None and self.problem(spec, agent=agent) is None
 
 
 def detect_cli(

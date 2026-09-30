@@ -67,7 +67,7 @@ When someone asks you something ("Mariana, o que você acha desse gráfico?"), t
 
 `--level` overrides `autonomy_level` from the config for one meeting.
 
-The agent that answers is `brain.backend` in the config, set by `sombra setup`: `claude-code` (your Claude Pro/Max plan through the Claude Code CLI), `claude-api` (the Anthropic key from the keychain) or `codex` (the Codex CLI, on `codex login` or an OpenAI key). Summaries and minutes follow it unless `[summary] backend` says otherwise ([providers.md](providers.md)).
+The agent that answers is `brain.backend` in the config, set by `sombra setup`: `claude-code` (your Claude Pro/Max plan through the Claude Code CLI), `claude-api` (the Anthropic key from the keychain) or `codex` (the Codex CLI, on `codex login` or an OpenAI key). The Codex agent only runs on a Codex CLI version whose tool set was verified, currently 0.159.1 (`npm i -g @openai/codex@0.159.1`); a newer or older CLI is refused with a message saying so, and `sombra setup` / `sombra doctor` say it first ([ADR 0018](adr/0018-codex-backend.md)). Summaries and minutes follow the agent unless `[summary] backend` says otherwise ([providers.md](providers.md)).
 
 ## Pause
 

@@ -211,7 +211,7 @@ class _Wizard:
             self.say(f"  type a number from 1 to {len(options)}")
 
     # checks
-    def cli(self, spec: CliSpec) -> CliState | None:
+    def cli(self, spec: CliSpec, *, agent: bool) -> CliState | None:
         state = detect_cli(spec, self.io.which, self.io.run, self.io.environ)
         if not state.installed:
             self.say(f"  {spec.label} (`{spec.name}`) is not installed.")
@@ -225,15 +225,15 @@ class _Wizard:
                     f"so `{spec.name}` is on PATH, and run `sombra setup` again)"
                 )
                 return None
-        need = version_str(spec.min_version)
-        if not state.new_enough(spec):
-            found = version_str(state.version) if state.version else "an unreadable version"
-            self.say(f"  {spec.label} at {state.path} is {found}; Sombra needs {need} or newer.")
-            if self.confirm(f"  Update it now with `{spec.update}`?"):
+        problem = state.problem(spec, agent=agent)
+        if problem is not None:
+            self.say(f"  {spec.label} at {state.path}: {problem}.")
+            if self.confirm(f"  Fix it now with `{spec.update}`?"):
                 self.io.run_interactive(["sh", "-c", spec.update])
                 state = detect_cli(spec, self.io.which, self.io.run, self.io.environ)
-            if not state.new_enough(spec):
-                self.problems.append(f"update {spec.label} to {need} or newer: `{spec.update}`")
+                problem = state.problem(spec, agent=agent)
+            if problem is not None:
+                self.problems.append(f"{spec.label}: {problem}; run `{spec.update}`")
                 return None
         assert state.path is not None and state.version is not None  # noqa: S101 - checked
         self.say(f"  ok  {spec.label} {version_str(state.version)} ({state.path})")
@@ -285,7 +285,7 @@ class _Wizard:
         spec = needs.cli
         path: str | None = None
         if spec is not None:
-            state = self.cli(spec)
+            state = self.cli(spec, agent=needs.role == "agent")
             if state is None:
                 return False
             path = state.path

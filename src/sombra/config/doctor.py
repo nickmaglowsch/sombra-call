@@ -350,16 +350,15 @@ def check_linux(p: Probes) -> list[Check]:
 # --- agent section ----------------------------------------------------------------------
 
 
-def _cli_checks(p: Probes, spec: CliSpec) -> tuple[list[Check], CliState | None]:
+def _cli_checks(p: Probes, spec: CliSpec, agent: bool) -> tuple[list[Check], CliState | None]:
     name = f"{spec.name} CLI"
     state = detect_cli(spec, p.which, p.run, p.environ)
     if state.path is None:
         fix = f"install it: `{spec.install}`, then run `sombra setup`"
         return [Check("agent", name, Status.FAIL, "not on PATH", fix)], None
-    need = version_str(spec.min_version)
-    if not state.new_enough(spec):
-        found = version_str(state.version) if state.version else "unreadable version"
-        detail = f"{found} at {state.path}; Sombra needs {need} or newer"
+    problem = state.problem(spec, agent=agent)
+    if problem is not None:
+        detail = f"{problem} ({state.path})"
         return [Check("agent", name, Status.FAIL, detail, f"`{spec.update}`")], None
     version = version_str(state.version) if state.version else "?"
     return [Check("agent", name, Status.OK, f"{version} ({state.path})")], state
@@ -402,12 +401,12 @@ def _needs_checks(p: Probes, needs: Needs, done: set[str]) -> list[Check]:
     state: CliState | None = None
     if spec is not None:
         if spec.name not in done:
-            cli, state = _cli_checks(p, spec)
+            cli, state = _cli_checks(p, spec, agent=needs.role == "agent")
             out += cli
             done.add(spec.name)
         else:
             state = detect_cli(spec, p.which, p.run, p.environ)
-            state = state if state.new_enough(spec) else None
+            state = state if state.usable(spec, agent=needs.role == "agent") else None
     path = state.path if state is not None else None
     if spec is not None and needs.key_or_login and needs.key is not None:
         key = _key_check(p, needs.key, Status.WARN)
