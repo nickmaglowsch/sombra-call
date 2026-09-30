@@ -234,7 +234,7 @@ codesign --verify -R='cdhash H"6a73…"' next/adhoc/Sombra.app
 
 **Gatekeeper.** app-smoke writes `com.apple.quarantine` on the zip (as Safari would) before `install.sh`. Afterwards no file in `/Applications/Sombra.app` carries it.
 
-**Release gate.** The first run's ad-hoc app was recorded and rejected for a final release, although under the Developer ID rules this ADR replaced. Its self-signed-era equivalent is `not release-ready: signature is adhoc, …`. On each run, app-smoke also checks two things for the throwaway-signed twin: `app_gate.py ready` pinned to its certificate must pass, and pinned to any other certificate it must fail. The unit tests in `tests/release/test_app_gate.py` cover the decision itself (ad-hoc or wrong certificate on a final tag → refused).
+**Release gate.** The first run's ad-hoc app was recorded and rejected for a final release, although under the Developer ID rules this ADR replaced. Its self-signed-era equivalent is `not release-ready: signature is adhoc, …`. In run 36650828166, app-smoke (selfsigned-test) passed both of its gate checks: `app_gate.py ready` pinned to the twin's own certificate passed, and pinned to another certificate it failed. The same job also passed `doctor`'s "app signature" check (`signed with the certificate 'Sombra CI Throwaway': the grants survive upgrades`) and `replay`. The unit tests in `tests/release/test_app_gate.py` cover the decision itself (ad-hoc or wrong certificate on a final tag → refused).
 
 ## Consequences
 
