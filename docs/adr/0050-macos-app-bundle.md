@@ -132,7 +132,7 @@ The live-capture callbacks (PortAudio through cffi, the process tap, ScreenCaptu
 Gatekeeper only assesses an app that carries the `com.apple.quarantine` extended attribute. A self-signed, unnotarized app with that attribute is blocked. Without it, it runs.
 
 - `install.sh` downloads with `curl`, which sets no quarantine. After copying the app, it also runs `xattr -dr com.apple.quarantine` on it, because a zip the user downloaded with a browser *is* quarantined, and `ditto` carries the attribute into the app. The app-smoke job quarantines the zip on purpose, installs it, and checks that no file in the installed app keeps the attribute.
-- The Homebrew cask (#51) strips quarantine in `postflight`.
+- The Homebrew cask (#51) never removes quarantine (owner decision). The documented install has a second step the user runs: `xattr -dr com.apple.quarantine /Applications/Sombra.app`, or Open Anyway (see `docs/install.md`).
 - By hand, after downloading the zip in a browser and moving `Sombra.app` to Applications:
   - either run `xattr -dr com.apple.quarantine /Applications/Sombra.app`;
   - or on macOS 14, right-click the app → **Open** → **Open**. On macOS 15+ that shortcut is gone: open it once, then use System Settings → Privacy & Security → **Open Anyway**.
