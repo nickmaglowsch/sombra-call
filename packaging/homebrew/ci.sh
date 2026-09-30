@@ -2,14 +2,16 @@
 # Homebrew checks for a rendered cask, run by .github/workflows/homebrew.yml on macos-14.
 #
 #   ci.sh audit <cask.rb>                   brew style + brew audit --cask --strict
-#   ci.sh smoke <cask.rb> <expected-version> install --no-quarantine, sombra --version,
-#                                            sombra doctor --json, uninstall --zap
+#   ci.sh smoke <cask.rb> <expected-version> install, quarantine check + user step,
+#                                            sombra --version, doctor --json, uninstall --zap
 #
 # Recent Homebrew only audits and installs casks that live in a tap, so both put the
 # rendered file in a throwaway local tap (sombra-ci/local) and remove it afterwards.
 # smoke also proves that `brew uninstall --zap` leaves ~/Sombra/meetings alone.
-# smoke installs with --no-quarantine, the documented user path for the self-signed,
-# unnotarized app (#51); the cask itself never touches the quarantine flag.
+# smoke follows the documented two-step install for the self-signed, unnotarized app (#51):
+# a plain `brew install --cask`, which must leave the app quarantined (the cask never clears
+# the flag), then the step the docs tell the user to run, performed here on the throwaway
+# runner in the user's place.
 set -eu
 
 TAP=sombra-ci/local
@@ -43,11 +45,17 @@ smoke() {
   echo "user data: must survive brew uninstall --zap" >"$sentinel"
   local_tap "$1"
 
-  brew install --cask --no-quarantine "$CASK"
+  brew install --cask "$CASK"
   app="$(brew --prefix)/Caskroom/sombra"
   test -d "$app" || { echo "::error::$app missing after install" >&2; exit 1; }
   appdir=/Applications/Sombra.app
   test -d "$appdir" || { echo "::error::$appdir missing after install" >&2; exit 1; }
+  if ! xattr -p com.apple.quarantine "$appdir" >/dev/null 2>&1; then
+    echo "::error::$appdir is not quarantined: Homebrew should set the flag and the cask must not clear it" >&2
+    exit 1
+  fi
+  # The documented user step (docs/install.md), run by this script in the user's place.
+  xattr -dr com.apple.quarantine "$appdir"
 
   got="$(sombra --version)"
   echo "$got"

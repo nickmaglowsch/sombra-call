@@ -28,14 +28,11 @@ cask "sombra" do
 
   caveats <<~EOS
     Sombra.app is self-signed and not notarized by Apple (Sombra has no paid
-    Apple Developer account), so macOS blocks it while it is quarantined.
-    This cask never removes the quarantine flag itself. The recommended install
-    opts out explicitly:
-      brew install --cask --no-quarantine nickmaglowsch/sombra/sombra
-    If you installed without --no-quarantine, either run
+    Apple Developer account), so Gatekeeper blocks its first launch while it
+    carries the quarantine flag Homebrew sets. This cask never removes that flag.
+    Clear it yourself, for this app only, with one of:
       xattr -dr com.apple.quarantine /Applications/Sombra.app
-    or right-click Sombra.app > Open once (on macOS 15+: open it, then
-    System Settings > Privacy & Security > Open Anyway).
+    or open Sombra once, then System Settings > Privacy & Security > Open Anyway.
 
     Next steps:
       1. sombra doctor              # checks models, permissions and agent CLIs
