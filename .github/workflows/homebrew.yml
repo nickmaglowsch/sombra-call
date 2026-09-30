@@ -115,8 +115,10 @@ jobs:
           else
             version="$FAKE_VERSION" release=false
           fi
-          # The PR run proves the bump with a dry run against the fake SHA256SUMS.
+          # The PR run proves the bump with a dry run against the fake SHA256SUMS, and so
+          # does a manual dry run with no final release to render (the setup check).
           [ "$EVENT" = pull_request ] && bump=true
+          [ "$EVENT" = workflow_dispatch ] && [ "$release" = false ] && [ "$dry_run" = true ] && bump=true
           # Install the real release before it goes to the tap, or a given zip on request.
           smoke=false
           if [ "$release" = true ] || [ -n "$INPUT_ZIP" ]; then smoke=true; fi
