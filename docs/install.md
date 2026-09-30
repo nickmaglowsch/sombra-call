@@ -74,6 +74,8 @@ Sombra.app is signed with the project's own certificate, not an Apple Developer 
 
   or, on macOS 14, right-click Sombra.app → **Open** → **Open**. On macOS 15 and later, open it once, then go to System Settings → Privacy & Security and click **Open Anyway**.
 
+  Sombra.app has no window: after **Open Anyway**, nothing appears on screen, and that is expected. The app is now allowed; run `sombra` in a terminal (checked on macOS 27: the quarantine flag stays but is marked as approved, and Gatekeeper no longer blocks it).
+
 What you are trusting is the release on GitHub: `install.sh` checks the download against the release's `SHA256SUMS` over HTTPS. To check the app's certificate yourself, see [docs/release.md](release.md#verifying-a-download).
 
 ## Options
