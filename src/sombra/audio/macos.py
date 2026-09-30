@@ -569,6 +569,11 @@ def _name_of(dev_id: str) -> str:
 
 
 def _default_in(sd: Any) -> int:
+    """Default input index, or -1. ``sd.default.device`` is sounddevice's
+    ``_InputOutputPair`` (indexable, but not a list or tuple); fakes may use a scalar."""
     dev = sd.default.device
-    idx = dev[0] if isinstance(dev, list | tuple) else dev
-    return int(idx) if idx is not None else -1
+    try:
+        idx = dev[0]
+    except (TypeError, IndexError, KeyError):
+        idx = dev
+    return int(idx) if isinstance(idx, int) else -1

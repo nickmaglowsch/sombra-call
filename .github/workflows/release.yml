@@ -1,0 +1,200 @@
+# Tag-driven releases (issue #44, ADR 0044). See docs/release.md.
+#
+# - push of a tag vX.Y.Z[-rcN|-betaN|-alphaN]: build → smoke install → publish a GitHub Release.
+# - pull_request touching the release files: the same build and smoke jobs, no publish,
+#   so the PR proves the pipeline.
+#
+# Not a required check: the ruleset only requires the jobs in ci.yml.
+name: Release
+
+on:
+  push:
+    tags: ["v*"]
+  pull_request:
+    paths:
+      - .github/workflows/release.yml
+      - scripts/release/**
+      - scripts/install.sh
+      - tests/release/**
+      - pyproject.toml
+      - uv.lock
+      - src/sombra/__init__.py
+      - src/sombra/cli.py
+
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    name: build
+    runs-on: ubuntu-latest
+    outputs:
+      version: ${{ steps.meta.outputs.version }}
+      prerelease: ${{ steps.meta.outputs.prerelease }}
+      latest: ${{ steps.meta.outputs.latest }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0 # hatch-vcs derives the version from the tags
+      - uses: astral-sh/setup-uv@v6
+      - name: Tag is on main
+        if: github.ref_type == 'tag'
+        run: |
+          git fetch --no-tags origin main
+          if ! git merge-base --is-ancestor "$GITHUB_SHA" origin/main; then
+            echo "::error::$GITHUB_REF_NAME points at a commit that is not on main; tag a merged commit."
+            exit 1
+          fi
+      - name: Build sdist + wheel
+        run: uv build --out-dir dist
+      - name: Add install.sh (when it exists)
+        run: |
+          if [ -f scripts/install.sh ]; then cp scripts/install.sh dist/install.sh; fi
+      - name: Version matches the tag
+        id: meta
+        run: |
+          if [ "$GITHUB_REF_TYPE" = tag ]; then
+            # shellcheck disable=SC2046 # one word per tag name
+            uv run --no-project --python 3.12 scripts/release/tags.py check "$GITHUB_REF_NAME" \
+              --dist dist --github-output "$GITHUB_OUTPUT" --tags $(git tag --list 'v*')
+          else
+            wheel=$(basename dist/sombra-*.whl)
+            echo "version=$(echo "$wheel" | cut -d- -f2)" | tee -a "$GITHUB_OUTPUT"
+            echo "prerelease=true" | tee -a "$GITHUB_OUTPUT"
+            echo "latest=false" | tee -a "$GITHUB_OUTPUT"
+          fi
+      - name: Write and verify SHA256SUMS
+        run: |
+          uv run --no-project --python 3.12 scripts/release/checksums.py write dist
+          uv run --no-project --python 3.12 scripts/release/checksums.py verify dist
+          (cd dist && sha256sum -c SHA256SUMS)
+      - uses: actions/upload-artifact@v4
+        with:
+          name: dist
+          path: dist/
+          if-no-files-found: error
+          retention-days: 14
+
+  smoke:
+    name: smoke (${{ matrix.os }})
+    needs: build
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 20
+    strategy:
+      fail-fast: false
+      matrix:
+        # ADR 0044: macOS 14+ on Apple Silicon; Ubuntu 22.04/24.04 on x86_64 and aarch64.
+        os: [macos-14, ubuntu-latest, ubuntu-22.04, ubuntu-24.04-arm]
+    env:
+      # Install with a uv-managed CPython, as end users do, never the runner's Python.
+      UV_PYTHON_PREFERENCE: only-managed
+      EXPECTED_VERSION: ${{ needs.build.outputs.version }}
+    steps:
+      # No checkout: install only the built artifacts, the way end users get them.
+      - uses: actions/download-artifact@v4
+        with:
+          name: dist
+          path: dist
+      - name: Verify SHA256SUMS with the stock tool (the command docs/release.md gives users)
+        working-directory: dist
+        run: |
+          if [ "$RUNNER_OS" = macOS ]; then
+            shasum -a 256 -c --ignore-missing SHA256SUMS
+          else
+            sha256sum -c --ignore-missing SHA256SUMS
+          fi
+      - uses: astral-sh/setup-uv@v6
+        with:
+          enable-cache: false # a clean runner, as a first-time user has
+      - name: Install
+        run: |
+          wheel=$(ls dist/sombra-*.whl)
+          if [ -f dist/install.sh ]; then
+            sh dist/install.sh --from-wheel "$wheel" --yes --no-models
+          else
+            uv tool install --python 3.12 "$wheel"
+          fi
+          uv tool dir --bin >> "$GITHUB_PATH"
+      - name: sombra --version
+        run: |
+          got=$(sombra --version)
+          echo "$got"
+          test "$got" = "sombra $EXPECTED_VERSION"
+      - name: sombra --help
+        run: sombra --help
+      - name: sombra new
+        run: |
+          dir=$(sombra new "Release smoke")
+          echo "$dir"
+          test -d "$dir"
+      # `sombra replay` runs the whole pipeline (VAD, whisper, dedupe, trigger, store) on the
+      # synthetic PT-BR e2e fixture, with the fake brain: no API key, no permissions.
+      # Only the fixture files are checked out, never the source.
+      - uses: actions/checkout@v4
+        with:
+          path: fixture-src
+          sparse-checkout: tests/fixtures/e2e
+          sparse-checkout-cone-mode: false
+      - name: Cache models (whisper tiny + Silero VAD)
+        uses: actions/cache@v4
+        with:
+          path: ~/.cache/sombra/models
+          key: release-smoke-models-${{ runner.os }}-${{ runner.arch }}-tiny-vad
+      - name: sombra models download tiny
+        run: sombra models download tiny
+      - name: sombra replay (fake brain)
+        run: |
+          fx=fixture-src/tests/fixtures/e2e
+          out=$(sombra replay "$fx/me.wav" "$fx/others.wav" --frames "$fx/frames" \
+            --user Maria --fake-brain --auto-approve --stt-model tiny \
+            --name release-smoke --root "$RUNNER_TEMP/meetings")
+          echo "$out"
+          dir=$(echo "$out" | head -n 1)
+          test -s "$dir/transcript.md"
+          # The fixture calls Maria once: expect exactly trigger -> suggestion -> action.
+          "$(uv tool dir)/sombra/bin/python" -c "
+          import json, pathlib, sys
+          log = pathlib.Path(sys.argv[1], 'log.jsonl').read_text().splitlines()
+          types = [json.loads(line)['type'] for line in log]
+          print(types)
+          assert types == ['trigger', 'suggestion', 'action'], types" "$dir"
+
+  publish:
+    name: publish
+    if: github.event_name == 'push' && github.ref_type == 'tag'
+    needs: [build, smoke]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0 # the notes need the previous tag
+      - uses: astral-sh/setup-uv@v6
+      - uses: actions/download-artifact@v4
+        with:
+          name: dist
+          path: dist
+      - name: Verify SHA256SUMS
+        run: uv run --no-project --python 3.12 scripts/release/checksums.py verify dist
+      - name: Release notes from merged PR titles
+        run: |
+          uv run --no-project --python 3.12 scripts/release/notes.py "$GITHUB_REF_NAME" \
+            --repo "$GITHUB_REPOSITORY" --output "$RUNNER_TEMP/notes.md"
+          cat "$RUNNER_TEMP/notes.md"
+      - name: Create the GitHub Release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          PRERELEASE: ${{ needs.build.outputs.prerelease }}
+          LATEST: ${{ needs.build.outputs.latest }}
+        run: |
+          # "Latest" (what releases/latest and install.sh resolve) is set explicitly: only
+          # the highest final version gets it, never a patch to an older line.
+          gh release create "$GITHUB_REF_NAME" dist/* \
+            --verify-tag --title "Sombra $GITHUB_REF_NAME" \
+            --notes-file "$RUNNER_TEMP/notes.md" \
+            --prerelease="$PRERELEASE" --latest="$LATEST"

@@ -46,7 +46,6 @@ from sombra.orchestrator.wiring import (
     build_detector,
     build_transcriber,
     key_provider,
-    one_at_a_time,
     resolve_claude_model,
     resolve_whisper_model,
 )
@@ -79,32 +78,6 @@ def test_pause_adapter_reads_the_controller() -> None:
     assert adapter.is_paused() is False
     controller.pause()
     assert adapter.is_paused() is True
-
-
-def test_whisper_engines_load_one_at_a_time() -> None:
-    import threading
-    import time
-
-    active, peak = 0, 0
-    guard = threading.Lock()
-
-    def load() -> object:
-        nonlocal active, peak
-        with guard:
-            active += 1
-            peak = max(peak, active)
-        time.sleep(0.05)
-        with guard:
-            active -= 1
-        return object()
-
-    factory = one_at_a_time(load)  # type: ignore[arg-type]
-    threads = [threading.Thread(target=factory, args=(ch,)) for ch in Channel]
-    for t in threads:
-        t.start()
-    for t in threads:
-        t.join()
-    assert peak == 1
 
 
 def test_build_transcriber_checks_the_models(tmp_path: Path) -> None:

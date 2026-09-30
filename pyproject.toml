@@ -1,6 +1,6 @@
 [project]
 name = "sombra"
-version = "0.0.1"
+dynamic = ["version"]
 description = "Autonomous meeting participant: local STT + screen timeline, answers for you when called."
 readme = "README.md"
 requires-python = ">=3.12"
@@ -39,8 +39,18 @@ dev = [
 ]
 
 [build-system]
-requires = ["hatchling"]
+requires = ["hatchling", "hatch-vcs"]
 build-backend = "hatchling.build"
+
+# The version comes from the git tag (vX.Y.Z), so a release needs no commit on main.
+# Untagged builds get a dev version such as 0.1.dev42+g1a2b3c4; see docs/release.md.
+[tool.hatch.version]
+source = "vcs"
+fallback-version = "0.0.0"
+
+[tool.uv]
+# Rebuild the editable install when HEAD or the tags move, so `sombra --version` stays current.
+cache-keys = [{ file = "pyproject.toml" }, { git = { commit = true, tags = true } }]
 
 [tool.hatch.build.targets.wheel]
 packages = ["src/sombra"]
