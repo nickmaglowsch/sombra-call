@@ -439,8 +439,11 @@ jobs:
           if os.environ["VARIANT"] == "selfsigned-test":
               assert signature["status"] == "ok", signature
               assert "'Sombra CI Throwaway'" in signature["detail"], signature
+          # Expected fails on a clean runner: the models (--no-models) and the agent (no
+          # provider set up), as in install-smoke.yml.
           fails = [c for c in data["checks"] if c["status"] == "fail"]
-          unexpected = [c for c in fails if not c["name"].startswith("model ")]
+          expected = lambda c: c["name"].startswith("model ") or c["section"] == "agent"
+          unexpected = [c for c in fails if not expected(c)]
           assert not unexpected, unexpected
           crashed = [c for c in data["checks"] if c["detail"].startswith("could not check")]
           assert not crashed, crashed
