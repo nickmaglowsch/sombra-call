@@ -12,7 +12,7 @@ Sombra ships as GitHub Releases, built by `.github/workflows/release.yml` when a
 ## Cutting a release
 
 1. Make sure `main` is green and holds everything the release needs.
-2. Tag the merged commit on `main` and push the tag. Only maintainers push tags (enforcing that with a tag ruleset is #54).
+2. Tag the merged commit on `main` and push the tag. Only repository admins can push a `v*` tag: the [tag ruleset](#release-tag-ruleset) refuses anyone else.
 
    ```sh
    git fetch origin
@@ -29,6 +29,30 @@ Sombra ships as GitHub Releases, built by `.github/workflows/release.yml` when a
 4. If a job fails, nothing is published. Fix it on `main` through a PR, then tag the next patch or `-rcN`. Never move a published tag.
 
 PRs that touch the release files run the same jobs without **publish**. They never use the signing secrets, so their `Sombra.app` is ad-hoc signed and only uploaded as a workflow artifact (`macos-app`). **Actions → Release → Run workflow** runs the same jobs by hand, and signs with the project's certificate when the secrets exist: that is how to test the signing setup without a tag.
+
+## Release tag ruleset
+
+`.github/rulesets/tags.json` protects every tag matching `refs/tags/v*`. Once applied, it guarantees:
+
+- **Only repository admins create release tags.** Anyone else with write access gets a push rejected for a `v*` tag (`creation`). `release.yml` still decides *what* a tag may release (a commit on `main`, the tag's version); the ruleset decides *who* can start one.
+- **A published tag is never moved** (`update`, `non_fast_forward`): `git push --force` of an existing `v*` tag to another commit is refused.
+- **A published tag is never deleted** (`deletion`), so a release and its assets always keep their tag.
+- **The bypass is the repository Admin role only** (`RepositoryRole` id `5`), mode `always`. Maintain and Write roles, apps and Actions' `GITHUB_TOKEN` have no bypass. An admin who really must fix a bad tag can, but the docs above still say: tag the next patch instead of moving one.
+
+Tags that don't start with `v` are not covered. An admin's own push is never blocked, so keep the Admin role to the owner.
+
+Rulesets live in the repository settings, not in git: the file does nothing until the owner imports it once, with admin rights. Either:
+
+- **UI:** Settings → Rules → Rulesets → New ruleset → **Import a ruleset**, pick `.github/rulesets/tags.json`, check that it says target *Tag*, enforcement *Active*, bypass *Repository admin*, then **Create**.
+- **CLI** (`gh` logged in as an admin):
+
+  ```sh
+  gh api --method POST repos/nickmaglowsch/sombra-call/rulesets --input .github/rulesets/tags.json
+  ```
+
+  To update it after editing the file, `PUT` to `repos/nickmaglowsch/sombra-call/rulesets/<id>` with the same `--input` (`gh api repos/nickmaglowsch/sombra-call/rulesets` lists the ids).
+
+To check it, push a throwaway tag from an account with write access but not admin: `git push origin v0.0.0-test` must be rejected by the ruleset ("creations being restricted"). `tests/test_rulesets.py` checks the file keeps this shape.
 
 ## What's in a release
 
