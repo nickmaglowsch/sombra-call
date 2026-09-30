@@ -3,3 +3,4 @@
 # else, and macOS keys the users' permission grants on this certificate, so it never
 # changes. Create it once with scripts/release/make-signing-identity.sh, then put the
 # printed fingerprint on the line below (64 hex characters) through a PR.
+61053ed7549338b4bb3b618463389e25df50a904fb2f76d58dc6deed6a2ea3c0
