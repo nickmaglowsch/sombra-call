@@ -79,7 +79,7 @@ On macOS 14+ (Apple Silicon) or Ubuntu 22.04/24.04:
 curl -fsSL https://github.com/nickmaglowsch/sombra-call/releases/latest/download/install.sh | sh
 ```
 
-On macOS it installs the signed and notarized `Sombra.app`, so macOS asks for the permissions as Sombra rather than your terminal; on Ubuntu (or with `--no-app`) it installs uv (if missing) and Sombra on a uv-managed Python 3.12. It then downloads the local models, writes `~/.config/sombra/config.toml` and runs `sombra doctor`, which lists what is still needed (permissions, API keys). Re-run it to upgrade; `--uninstall` removes it and never touches `~/Sombra/meetings`. On Ubuntu, live capture is not built yet. Options and details: [`docs/install.md`](docs/install.md).
+On macOS it installs `Sombra.app`, signed with the project's own certificate, so macOS asks for the permissions as Sombra rather than your terminal; on Ubuntu (or with `--no-app`) it installs uv (if missing) and Sombra on a uv-managed Python 3.12. It then downloads the local models, writes `~/.config/sombra/config.toml` and runs `sombra doctor`, which lists what is still needed (permissions, API keys). Re-run it to upgrade; `--uninstall` removes it and never touches `~/Sombra/meetings`. On Ubuntu, live capture is not built yet. Options and details: [`docs/install.md`](docs/install.md).
 
 ## Development
 

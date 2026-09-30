@@ -20,7 +20,7 @@ from app_gate import ADHOC, CERTIFICATE, AppStatus, decide, main, parse_codesign
 PINNED = "8a7b2d7884e5aa6f18b6048727483338ff7fbdaf21ed6cca9ff785cdf834dcf2"
 OTHER = "0" * 63 + "1"
 SHA1 = "0e2de9348dbbbdb43139736307c66406b63ff87d"
-PINNED_DR = f'identifier "{sombra_app.BUNDLE_ID}" and certificate leaf = H"{SHA1}"'
+PINNED_DR = f'identifier "{sombra_app.BUNDLE_ID}" and certificate root = H"{SHA1}"'
 
 CODESIGN_SELF_SIGNED = f"""\
 Executable=/Applications/Sombra.app/Contents/MacOS/Sombra
@@ -111,7 +111,7 @@ def test_parse_requirement() -> None:
     ("requirement", "pins"),
     [
         (PINNED_DR, True),
-        (f'identifier "{sombra_app.BUNDLE_ID}" and certificate root = H"{SHA1}"', True),
+        (f'identifier "{sombra_app.BUNDLE_ID}" and certificate leaf = H"{SHA1}"', True),
         ('cdhash H"4b1c0f0e2a9d7c1e3f5a6b7c8d9e0f1a2b3c4d5e"', False),  # ad-hoc
         (f'identifier "other.app" and certificate leaf = H"{SHA1}"', False),
         (f'identifier "{sombra_app.BUNDLE_ID}"', False),  # no certificate at all

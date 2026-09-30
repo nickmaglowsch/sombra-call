@@ -310,7 +310,7 @@ jobs:
           ditto "$SIGNED" "$next/self/Sombra.app"
           plutil -replace CFBundleVersion -string "next" "$next/self/Sombra.app/Contents/Info.plist"
           uv run --no-project --python 3.12 packaging/macos/sign.py "$next/self/Sombra.app" --identity "$SHA1"
-          codesign --verify -R="=$DR_SELF" "$next/self/Sombra.app"
+          codesign --verify -R="$DR_SELF" "$next/self/Sombra.app"
           echo "self-signed: the next build satisfies the stored requirement -> grants persist"
           if [ "$SIGN" != true ]; then
             dr_adhoc=$(codesign -d -r- "$ADHOC" 2>/dev/null | sed -n 's/^designated => //p')
@@ -318,8 +318,10 @@ jobs:
             ditto "$ADHOC" "$next/adhoc/Sombra.app"
             plutil -replace CFBundleVersion -string "next" "$next/adhoc/Sombra.app/Contents/Info.plist"
             uv run --no-project --python 3.12 packaging/macos/sign.py "$next/adhoc/Sombra.app" --identity -
-            if codesign --verify -R="=$dr_adhoc" "$next/adhoc/Sombra.app"; then
-              echo "::error::an ad-hoc rebuild satisfied the old cdhash requirement"; exit 1
+            out=$(codesign --verify -R="$dr_adhoc" "$next/adhoc/Sombra.app" 2>&1) && rc=0 || rc=$?
+            echo "$out"
+            if [ "$rc" -eq 0 ] || ! echo "$out" | grep -q "failed to satisfy"; then
+              echo "::error::expected the ad-hoc rebuild to fail the old cdhash requirement"; exit 1
             fi
             echo "ad-hoc: the next build fails the stored requirement -> grants reset"
           fi

@@ -127,7 +127,7 @@ def parse_requirement(text: str) -> str:
 def pins_certificate(requirement: str, identifier: str) -> bool:
     """True when the designated requirement names the identifier and a certificate hash.
 
-    A self-signed identity gets ``identifier "X" and certificate leaf = H"<sha1>"``; an
+    A self-signed identity gets ``identifier "X" and certificate root = H"<sha1>"``; an
     ad-hoc signature gets ``cdhash H"..."``, which changes with every build.
     """
     return (
