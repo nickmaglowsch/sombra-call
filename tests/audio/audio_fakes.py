@@ -58,7 +58,7 @@ class FakeStream:
         self.sd = sd
         self.kwargs = kwargs
         self.callback: Callable[..., None] = kwargs["callback"]
-        self.started = self.stopped = self.closed = False
+        self.started = self.stopped = self.aborted = self.closed = False
 
     def start(self) -> None:
         if self.sd.fail_start_on == self.kwargs["device"]:
@@ -66,7 +66,18 @@ class FakeStream:
         self.started = True
 
     def stop(self) -> None:
+        self._maybe_hang()
         self.stopped = True
+
+    def abort(self) -> None:
+        self._maybe_hang()
+        self.aborted = self.stopped = True
+
+    def _maybe_hang(self) -> None:
+        """Like the Core Audio deadlock in #75: block until the test releases it."""
+        if self.sd.hang_stop is not None:
+            self.sd.hanging.append(self)
+            self.sd.hang_stop.wait()
 
     def close(self) -> None:
         self.closed = True
@@ -128,6 +139,9 @@ class FakeSounddevice:
         self.reinitialised = 0
         self.after_reinit: list[dict[str, Any]] = []
         self.fail_start_on: int | None = None
+        # Set to an unset Event to make stop()/abort() block until it is set.
+        self.hang_stop: threading.Event | None = None
+        self.hanging: list[FakeStream] = []
 
     def query_devices(self) -> list[dict[str, Any]]:
         return [dict(d, index=i) for i, d in enumerate(self.devices)]
