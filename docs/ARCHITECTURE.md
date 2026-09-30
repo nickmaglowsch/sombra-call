@@ -66,7 +66,7 @@ Defined in code, with round-trip tests, in `src/sombra/contracts/`:
 ## Runtime flow (L2)
 
 1. Audio chunks → `Transcriber` → `SpeechLine` → `TimelineStore.append_entry`.
-2. Screenshots → `FramePipeline` → kept `FrameRecord` → `append_frame` + a `FrameMarker` line.
+2. Screenshots → `FramePipeline` → kept `FrameRecord` → `append_frame` (index record only), then its `FrameMarker` through the timeline queue → `append_entry` (one `TELA` line, in timeline order).
 3. Every new entry → `TriggerDetector.feed`. On a hit: `TriggerEvent` (question, last 60 s, `needs_screen`, candidate frames).
 4. Orchestrator logs the trigger, calls `ApprovalUI.notify_trigger`, then `Brain.answer` with 0–3 frame paths.
 5. The brain sends *stable prefix* (system + context + epoch summary + transcript) + *ephemeral tail* (last 60 s, question, images). Images never enter the session history.

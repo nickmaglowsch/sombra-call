@@ -2,7 +2,6 @@ import asyncio
 import os
 import threading
 from collections.abc import Iterator
-from dataclasses import replace
 from datetime import UTC, datetime, timedelta, timezone
 from pathlib import Path
 
@@ -125,9 +124,8 @@ def test_store_never_rewrites(store: MeetingStore, meeting: Path) -> None:
     assert all(snapshots[f] for f in files)
 
 
-def test_append_frame_writes_index_and_marker_with_same_id_and_ts(
-    store: MeetingStore, meeting: Path
-) -> None:
+def test_append_frame_writes_the_index_record_only(store: MeetingStore, meeting: Path) -> None:
+    """The ``TELA`` marker is the caller's ``append_entry`` (#41), never ``append_frame``'s."""
     ts = START + timedelta(minutes=2, seconds=10)
     store.append_frame(_frame(123, ts))
 
@@ -135,18 +133,18 @@ def test_append_frame_writes_index_and_marker_with_same_id_and_ts(
     assert len(index) == 1
     assert '"id":"f0123"' in index[0]
     assert f'"ts":"{ts.isoformat()}"' in index[0]
+    assert (meeting / "transcript.md").read_text(encoding="utf-8") == ""
+
+
+def test_frame_then_its_marker_writes_one_tela_line(store: MeetingStore, meeting: Path) -> None:
+    ts = START + timedelta(minutes=2, seconds=10)
+    store.append_frame(_frame(123, ts))
+    store.append_entry(FrameMarker(ts=ts, frame_id="f0123", window_title="Zoom - Roadmap Q4"))
 
     lines = (meeting / "transcript.md").read_text(encoding="utf-8").splitlines()
     assert lines == ['[14:32:10] TELA f0123 "Zoom - Roadmap Q4"']
     marker = parse_line(lines[0], day=START)
     assert marker == FrameMarker(ts=ts, frame_id="f0123", window_title="Zoom - Roadmap Q4")
-
-
-def test_frame_marker_falls_back_to_app_then_empty(store: MeetingStore, meeting: Path) -> None:
-    store.append_frame(_frame(1, START, title=None))
-    store.append_frame(replace(_frame(2, START, title=None), app=None))
-    lines = (meeting / "transcript.md").read_text(encoding="utf-8").splitlines()
-    assert lines == ['[14:30:00] TELA f0001 "zoom.us"', '[14:30:00] TELA f0002 ""']
 
 
 def test_log_writes_json_line(store: MeetingStore, meeting: Path) -> None:
@@ -249,7 +247,7 @@ def test_rejects_bad_fsync_interval(meeting: Path) -> None:
 def test_aware_times_are_written_in_meeting_timezone(store: MeetingStore, meeting: Path) -> None:
     utc_ts = datetime(2026, 9, 29, 17, 31, 0, tzinfo=UTC)  # 14:31 at UTC-3
     store.append_entry(SpeechLine(ts=utc_ts, channel=Channel.ME, text="oi"))
-    store.append_frame(_frame(1, utc_ts))
+    store.append_entry(FrameMarker(ts=utc_ts, frame_id="f0001", window_title="Zoom"))
     lines = (meeting / "transcript.md").read_text(encoding="utf-8").splitlines()
     assert [line[:10] for line in lines] == ["[14:31:00]", "[14:31:00]"]
     assert [e.ts for e in store.entries_since(START)] == [utc_ts, utc_ts]

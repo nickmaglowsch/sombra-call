@@ -90,7 +90,16 @@ class TimelineStore(Protocol):
 
     def append_entry(self, entry: TimelineEntry) -> None: ...
 
-    def append_frame(self, record: FrameRecord) -> None: ...
+    def append_frame(self, record: FrameRecord) -> None:
+        """Append ``record`` to ``frames/index.jsonl``. Writes nothing to ``transcript.md``.
+
+        The frame's ``TELA`` line is the caller's job: it appends the matching
+        ``FrameMarker`` with ``append_entry`` after this call, in timeline order, so the
+        marker keeps its place among speech lines and the trigger detector sees it.
+        One kept frame → one index record and one ``TELA`` line. The index record goes
+        first, so a marker never names a frame missing from it.
+        """
+        ...
 
     def log(self, event: LogEvent) -> None: ...
 
