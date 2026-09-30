@@ -54,7 +54,7 @@ uv run sombra start "Review" --window "Zoom Meeting"      # capture only that wi
 
 When someone asks you something ("Mariana, o que você acha desse gráfico?"), the overlay shows *buscando contexto…*, then the suggested answer, the excerpt that fired it and any slide that was sent. You can approve, edit or discard it; every choice is logged.
 
-**Stop** with Ctrl+C or by closing the overlay window. Sombra drains the transcription queue and writes the minutes (`## Ata` in `summary.md`), then prints the `sombra report` table. A second Ctrl+C while it stops aborts without waiting, and then the minutes are not written.
+**Stop** with Ctrl+C or by closing the overlay window. Sombra drains the transcription queue and writes the minutes (`## Ata` in `summary.md`), then prints the `sombra report` table. A second Ctrl+C while it stops aborts without waiting, and then the minutes are not written. If the audio devices hang while closing, Sombra gives up on them after 5 s and still writes the minutes (see [macOS audio](macos-audio.md#stopping)).
 
 ## Autonomy levels
 

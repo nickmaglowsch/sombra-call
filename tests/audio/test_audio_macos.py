@@ -137,7 +137,7 @@ async def test_stream_yields_both_channels_and_close_releases_everything() -> No
         assert all(b.start > a.start for a, b in pairwise(cs))
         assert np.allclose(np.frombuffer(cs[-1].pcm_f32le, "<f4"), level, atol=1e-3)
     assert src.overflows == 2
-    assert all(s.stopped and s.closed for s in sd.streams)
+    assert all(s.aborted and s.closed for s in sd.streams)
     assert taps[0].destroyed
     await src.close()  # idempotent
 

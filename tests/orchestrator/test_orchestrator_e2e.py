@@ -3,10 +3,10 @@
 from __future__ import annotations
 
 import json
-from datetime import timedelta
+from datetime import datetime, timedelta
 from pathlib import Path
 
-from orchestrator_harness import chatter, make_rig, speech, until
+from orchestrator_harness import BASE, chatter, make_rig, speech, until
 
 from fakes import FakeAudioSource, TriggerRule
 from sombra.contracts import ActionKind, Channel, FrameMarker, SpeechLine, Usage
@@ -34,6 +34,15 @@ async def test_ten_minute_meeting_with_three_triggers(tmp_path: Path) -> None:
         epochs.append(n)
         return EpochSummary(model="fake-summary", usage=Usage(input_tokens=10))
 
+    def meeting_clock() -> datetime:
+        # Suggestions appear 2 s (meeting time) after the question ended. Anchor on
+        # the question the brain is answering, not on the last entry fed to the
+        # detector: the timeline keeps flowing during the answer, and screen markers
+        # carry wall-clock timestamps, so that would leak real scheduling into the
+        # latency (#73). Answers run one at a time, so the last request is this one.
+        asked = rig.brain.requests[-1].trigger.ts if rig.brain.requests else BASE
+        return asked + timedelta(seconds=2)
+
     script = meeting_script()
     rig = make_rig(
         tmp_path,
@@ -47,8 +56,7 @@ async def test_ten_minute_meeting_with_three_triggers(tmp_path: Path) -> None:
         settings={"epoch_interval_s": 0.1},
         summarizer=summarize,
         epoch_hook=hook.append,
-        # Suggestions appear 2 s (meeting time) after the question ended.
-        clock=lambda: rig.detector.fed[-1].ts + timedelta(seconds=2),
+        clock=meeting_clock,
     )
     rig.ui.script = [
         (ActionKind.APPROVE, None),
