@@ -70,6 +70,11 @@ def test_invented_citation_mid_sentence_keeps_one_space() -> None:
         ("sexta [14:30:05 – 23:59:59].", "sexta [14:30:05]."),
         ("sexta [00:00:00-14:33:00].", "sexta [14:33:00]."),  # a range keeps its real end
         ("sexta [14:30:05, 00:00:00, 14:31:02].", "sexta [14:30:05, 14:31:02]."),
+        ("sexta [14:31:02/00:00:00].", "sexta [14:31:02]."),
+        ("sexta [[00:00:00]].", "sexta."),
+        ("sexta [[00:00:00, 14:31:02]].", "sexta [[14:31:02]]."),
+        ("sexta [00:00:00\n].", "sexta."),
+        ("sexta [\n00:00:00,\n14:31:02\n].", "sexta [14:31:02]."),
     ],
 )
 def test_multi_time_brackets_keep_only_real_times(text: str, expected: str) -> None:
