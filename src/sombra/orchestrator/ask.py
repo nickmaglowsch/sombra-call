@@ -13,6 +13,10 @@ Without ``--frames`` no screenshot may leave the machine. The API backend enforc
 that with :class:`FrameGate`; the CLI backends read files themselves, so they run on
 :class:`FramelessView`, a private copy of the folder without ``frames/``.
 
+Every ``[HH:MM:SS]`` the answer cites is checked against ``transcript.md`` before it is
+returned (:mod:`.citations`, #77): a time that starts no line is dropped, so it never
+reaches stdout, and the question's tail gives the model the transcript's real clock range.
+
 Nothing is written to the meeting folder, ``log.jsonl`` included. The existing event
 types describe live triggers: logging a question asked hours later as a
 ``trigger``/``suggestion`` would count as a live answer in ``sombra report`` and
@@ -29,7 +33,7 @@ import tempfile
 import time
 import tomllib
 import uuid
-from collections.abc import Callable
+from collections.abc import Callable, Sequence
 from dataclasses import dataclass
 from datetime import datetime
 from functools import partial
@@ -49,6 +53,7 @@ from sombra.brain.claude_code import ClaudeCodeBrain, ClaudeCodeRunner, ClaudeCo
 from sombra.brain.codex import CodexBrain, CodexRunner, CodexSettings
 from sombra.config import BrainConfig, UserConfig
 from sombra.contracts import AutonomyLevel, Brain, BrainRequest, BrainResponse, TriggerEvent
+from sombra.orchestrator.citations import check_citations, clock_hint, transcript_times
 from sombra.store import read_started_at, slugify
 from sombra.store.meeting import MEETING_FILE, TRANSCRIPT_FILE
 
@@ -178,11 +183,22 @@ def read_summary(meeting_dir: Path, max_bytes: int = MAX_INLINE_SUMMARY_BYTES) -
 
 
 def ask_prompt_kit(meeting_dir: Path, *, frames: bool) -> PromptKit:
-    """``brain.prompt`` with the post-meeting system prompt and question tail swapped in."""
+    """``brain.prompt`` with the post-meeting system prompt and question tail swapped in.
+
+    The tail ends with the transcript's real clock range (:func:`.citations.clock_hint`),
+    so the model cites ``[14:30:05]`` and not an offset like ``[00:00:00]`` (#77).
+    """
+    hint = clock_hint(transcript_times(meeting_dir, day=datetime.now().astimezone()))
+    build = partial(_prompt.build_ask_tail, summary_md=read_summary(meeting_dir))
+
+    def build_tail(trigger: TriggerEvent, frame_paths: Sequence[Path] = ()) -> list[dict[str, Any]]:
+        tail = build(trigger, frame_paths)
+        return [*tail, {"type": "text", "text": hint}] if hint else tail
+
     return PromptKit(
         system_prompt=partial(_prompt.post_meeting_system_prompt, frames=frames),
         prefix_builder=_prompt.PrefixBuilder,
-        build_tail=partial(_prompt.build_ask_tail, summary_md=read_summary(meeting_dir)),
+        build_tail=build_tail,
         render_request=_prompt.render_request,
         parse_frame_request=_prompt.parse_frame_request if frames else None,
     )
@@ -420,6 +436,7 @@ class AskResult:
     question: str
     response: BrainResponse
     elapsed_s: float
+    dropped_citations: tuple[str, ...] = ()  # cited times not in transcript.md, removed
 
 
 async def ask(
@@ -430,7 +447,11 @@ async def ask(
     frames: bool,
     clock: Clock,
 ) -> AskResult:
-    """Start ``brain`` on the meeting, ask one question, close it. Errors propagate."""
+    """Start ``brain`` on the meeting, ask one question, close it. Errors propagate.
+
+    The answer comes back whole (the :class:`Brain` port does not stream), and its
+    citations are checked here, before the caller prints anything.
+    """
     question = question.strip()
     if not question:
         raise ValueError("the question is empty")
@@ -445,4 +466,8 @@ async def ask(
     if not frames:
         # The gate stripped any image; do not report frames the model never saw.
         response = dataclasses.replace(response, frames_sent=[])
-    return AskResult(meeting_dir, question, response, time.perf_counter() - started)
+    checked = check_citations(response.text, set(transcript_times(meeting_dir, day=clock())))
+    response = dataclasses.replace(response, text=checked.text)
+    return AskResult(
+        meeting_dir, question, response, time.perf_counter() - started, checked.dropped
+    )
