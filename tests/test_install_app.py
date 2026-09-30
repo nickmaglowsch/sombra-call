@@ -170,6 +170,24 @@ def test_rerun_upgrades_in_place_and_replaces_a_uv_install(mac: dict[str, Path])
     assert "uv tool uninstall sombra" in (mac["home"] / "uv.log").read_text(encoding="utf-8")
 
 
+def test_app_dir_is_the_only_place_looked_at(mac: dict[str, Path]) -> None:
+    """With SOMBRA_APP_DIR set, a Sombra.app elsewhere (the user's real one, when the
+    tests run on a Mac with Sombra installed) is never upgraded or uninstalled."""
+    elsewhere = mac["home"] / "Applications" / "Sombra.app"
+    zip_path = _make_zip(mac["tmp"] / "Sombra-0.2.0-macos-arm64.zip")
+    with zipfile.ZipFile(zip_path) as z:
+        z.extractall(elsewhere.parent)
+    keep = elsewhere / "Contents" / "keep-me"
+    keep.write_text("the user's install")
+    result = _install(mac, "--from-app-zip", str(zip_path), "--yes", "--no-models")
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert (mac["apps"] / "Sombra.app" / "Contents" / "Info.plist").is_file()
+    assert keep.is_file()
+    assert _install(mac, "--uninstall", "--yes").returncode == 0
+    assert not (mac["apps"] / "Sombra.app").exists()
+    assert keep.is_file()
+
+
 def test_refuses_to_replace_another_app(mac: dict[str, Path]) -> None:
     other = mac["apps"] / "Sombra.app" / "Contents"
     other.mkdir(parents=True)
