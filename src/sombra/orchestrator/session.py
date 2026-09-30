@@ -5,7 +5,7 @@ Pipelines (each a supervised asyncio task, see :mod:`.supervisor`)::
     audio      AudioSource.stream ─(pause gate)─► audio queue
     transcribe audio queue ─► Transcriber ─► timeline queue
     screen     every N s ─(pause gate)─► grab ─(blocked app)─► FramePipeline
-                          ─► store.append_frame ─► FrameMarker ─► timeline queue
+                          ─► store.append_frame (index only) ─► FrameMarker ─► timeline queue
     timeline   timeline queue ─► store.append_entry ─► TriggerDetector.feed
     triggers   one TriggerEvent at a time (max 1 pending) ─► UI + Brain
     actions    ApprovalUI.actions ─► ActionLogged

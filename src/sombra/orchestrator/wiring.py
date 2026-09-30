@@ -30,10 +30,7 @@ from sombra.contracts import (
     Brain,
     BrainRequest,
     BrainResponse,
-    FrameMarker,
     FramePipeline,
-    FrameRecord,
-    LogEvent,
     ScreenSource,
     Suggestion,
     TimelineEntry,
@@ -118,42 +115,6 @@ class PauseAdapter:
 
     def is_paused(self) -> bool:
         return self.controller.is_paused
-
-
-class OneMarkerStore:
-    """``TimelineStore`` over ``MeetingStore`` that writes each frame's ``TELA`` line once.
-
-    TEMPORARY (#41): remove once ``TimelineStore.append_frame``'s marker contract is settled.
-
-    ``MeetingStore.append_frame`` writes the index record *and* its marker, while
-    ``Session`` also sends the same ``FrameMarker`` down the timeline queue (so the
-    trigger detector sees it in order) and appends it again. This keeps the store's
-    line and drops the echo. See issue #41.
-    """
-
-    def __init__(self, inner: MeetingStore) -> None:
-        self.inner = inner
-        self._marked: set[str] = set()
-
-    @property
-    def meeting_dir(self) -> Path:
-        return self.inner.meeting_dir
-
-    def append_entry(self, entry: TimelineEntry) -> None:
-        if isinstance(entry, FrameMarker) and entry.frame_id in self._marked:
-            self._marked.discard(entry.frame_id)
-            return
-        self.inner.append_entry(entry)
-
-    def append_frame(self, record: FrameRecord) -> None:
-        self.inner.append_frame(record)
-        self._marked.add(record.id)
-
-    def log(self, event: LogEvent) -> None:
-        self.inner.log(event)
-
-    def entries_since(self, since: datetime) -> list[TimelineEntry]:
-        return self.inner.entries_since(since)
 
 
 class NoTrigger:
@@ -370,7 +331,7 @@ def build_session(
         transcriber=transcriber,
         screen=screen,
         frames=frames or DedupeFramePipeline(meeting_dir),
-        store=OneMarkerStore(store),  # TEMPORARY (#41)
+        store=store,
         detector=detector,
         brain=brain,
         ui=ui,
