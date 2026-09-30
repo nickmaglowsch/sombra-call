@@ -4,8 +4,8 @@
 #   brew audit --cask --strict on macos-14, and a dry-run bump that prints the diff it
 #   would push to the tap.
 # - a final release: render the cask from the release's SHA256SUMS, audit it, install it
-#   on macos-14 (sombra --version, then brew uninstall --zap, which must leave
-#   ~/Sombra/meetings alone) and push Casks/sombra.rb to nickmaglowsch/homebrew-sombra.
+#   on macos-14 with --no-quarantine, the documented user path (sombra --version, sombra
+#   doctor --json, then brew uninstall --zap, which must leave ~/Sombra/meetings alone) and push Casks/sombra.rb to nickmaglowsch/homebrew-sombra.
 #   Pre-releases are skipped. Without the HOMEBREW_TAP_TOKEN secret, the push is a no-op
 #   with a notice.
 # - workflow_dispatch: the same for any release tag, a dry run by default. app_zip_url
@@ -198,8 +198,6 @@ jobs:
         run: sh packaging/homebrew/ci.sh smoke artifact/sombra.rb "$VERSION"
       - name: Install and uninstall a given zip from a local file URL
         if: env.ZIP_URL != ''
-        env:
-          SOMBRA_SMOKE_ADHOC: "1"
         run: |
           zip="$RUNNER_TEMP/Sombra.zip"
           curl -fsSL -o "$zip" "$ZIP_URL"

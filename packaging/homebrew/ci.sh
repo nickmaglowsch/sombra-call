@@ -2,14 +2,14 @@
 # Homebrew checks for a rendered cask, run by .github/workflows/homebrew.yml on macos-14.
 #
 #   ci.sh audit <cask.rb>                   brew style + brew audit --cask --strict
-#   ci.sh smoke <cask.rb> <expected-version> install, sombra --version, uninstall --zap
+#   ci.sh smoke <cask.rb> <expected-version> install --no-quarantine, sombra --version,
+#                                            sombra doctor --json, uninstall --zap
 #
 # Recent Homebrew only audits and installs casks that live in a tap, so both put the
 # rendered file in a throwaway local tap (sombra-ci/local) and remove it afterwards.
 # smoke also proves that `brew uninstall --zap` leaves ~/Sombra/meetings alone.
-# SOMBRA_SMOKE_ADHOC=1 is for a zip given by hand (workflow_dispatch app_zip_url), such as
-# an ad-hoc signed PR build: this throwaway CI install then clears the quarantine flag, since
-# Gatekeeper refuses an unnotarized app while it is quarantined. It never runs for users.
+# smoke installs with --no-quarantine, the documented user path for the self-signed,
+# unnotarized app (#51); the cask itself never touches the quarantine flag.
 set -eu
 
 TAP=sombra-ci/local
@@ -43,14 +43,11 @@ smoke() {
   echo "user data: must survive brew uninstall --zap" >"$sentinel"
   local_tap "$1"
 
-  brew install --cask "$CASK"
+  brew install --cask --no-quarantine "$CASK"
   app="$(brew --prefix)/Caskroom/sombra"
   test -d "$app" || { echo "::error::$app missing after install" >&2; exit 1; }
   appdir=/Applications/Sombra.app
   test -d "$appdir" || { echo "::error::$appdir missing after install" >&2; exit 1; }
-  if [ "${SOMBRA_SMOKE_ADHOC:-0}" = 1 ]; then
-    xattr -dr com.apple.quarantine "$appdir" 2>/dev/null || true
-  fi
 
   got="$(sombra --version)"
   echo "$got"
@@ -58,6 +55,10 @@ smoke() {
     *"$expected"*) ;;
     *) echo "::error::sombra --version printed '$got', expected $expected" >&2; exit 1 ;;
   esac
+
+  # doctor exits 1 when a check fails (no models on a fresh runner); the JSON must still parse.
+  report="$(sombra doctor --json || true)"
+  printf '%s\n' "$report" | python3 -c 'import json, sys; r = json.load(sys.stdin); print("doctor ok =", r["ok"])'
 
   brew uninstall --cask --zap "$CASK"
   if [ -e "$appdir" ] || command -v sombra >/dev/null 2>&1; then

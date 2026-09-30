@@ -166,9 +166,25 @@ def test_caveats_give_the_next_steps() -> None:
 def test_caveats_say_plainly_the_app_is_not_notarized() -> None:
     text = render("0.3.0", ZIP_SHA)
     assert "self-signed and not notarized by Apple" in text
-    assert '"Open Anyway"' in text
+    assert "brew install --cask --no-quarantine nickmaglowsch/sombra/sombra" in text
+    # The manual fix for an install made without --no-quarantine.
+    assert "xattr -dr com.apple.quarantine /Applications/Sombra.app" in text
+    assert "right-click Sombra.app > Open once" in text
+    assert "Open Anyway" in text
     assert "Developer ID" not in text
-    assert "notarized app" not in text
+
+
+def test_the_cask_never_removes_quarantine_itself() -> None:
+    # Owner decision (#51): users opt out with --no-quarantine; the cask must not switch
+    # Gatekeeper off for everyone. The caveats may *mention* xattr as a manual fix, so
+    # only the Ruby code outside the caveats heredoc is checked.
+    text = render("0.3.0", ZIP_SHA)
+    caveats = re.search(r"caveats <<~EOS\n.*?\n\s*EOS", text, re.DOTALL)
+    assert caveats is not None
+    code = text.replace(caveats.group(0), "")
+    code = "\n".join(line for line in code.splitlines() if not line.lstrip().startswith("#"))
+    for forbidden in ("xattr", "quarantine", "postflight", "preflight", "system_command", "spctl"):
+        assert forbidden not in code, forbidden
 
 
 def test_render_takes_a_file_url_for_a_local_zip() -> None:
@@ -421,7 +437,7 @@ def test_tap_bootstrap_has_the_layout_homebrew_expects() -> None:
     assert (tap / "README.md").is_file()
     assert (tap / "Casks").is_dir()
     readme = (tap / "README.md").read_text()
-    assert "brew install --cask nickmaglowsch/sombra/sombra" in readme
+    assert "brew install --cask --no-quarantine nickmaglowsch/sombra/sombra" in readme
 
 
 def _sombra_app() -> ModuleType:

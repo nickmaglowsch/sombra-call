@@ -21,10 +21,10 @@ On Ubuntu, live capture (microphone, system audio, screen) is not built yet ([AD
 On macOS you can install `Sombra.app` with Homebrew instead:
 
 ```sh
-brew install --cask nickmaglowsch/sombra/sombra
+brew install --cask --no-quarantine nickmaglowsch/sombra/sombra
 ```
 
-This installs `Sombra.app` into `/Applications` and links the `sombra` command, which runs through the app. Microphone, Screen Recording and Accessibility are then granted to **Sombra**, not to your terminal. `Sombra.app` is signed with the project's own self-signed certificate and is **not notarized by Apple**, because Sombra has no paid Apple Developer account (#50). The zip is checked against the release's `SHA256SUMS`. If macOS says it cannot check the app, open System Settings > Privacy & Security and click **Open Anyway** for Sombra.
+This installs `Sombra.app` into `/Applications` and links the `sombra` command, which runs through the app. Microphone, Screen Recording and Accessibility are then granted to **Sombra**, not to your terminal. `Sombra.app` is signed with the project's own self-signed certificate and is **not notarized by Apple**, because Sombra has no paid Apple Developer account (#50). The zip is checked against the release's `SHA256SUMS`. macOS blocks an unnotarized app while it carries the quarantine flag that Homebrew puts on downloads. So the install line above passes `--no-quarantine`: you opt out explicitly, for this app only. The cask itself never removes the flag. If you installed without `--no-quarantine`, either run `xattr -dr com.apple.quarantine /Applications/Sombra.app` yourself, or right-click Sombra.app → **Open** once (on macOS 15 and later: open it, then System Settings → Privacy & Security → **Open Anyway**).
 
 Homebrew prints the next steps: `sombra doctor`, `sombra models download`, grant the permissions to Sombra, then `sombra setup`. It needs macOS 14+ on Apple Silicon, like the installer.
 
@@ -62,7 +62,7 @@ Re-running the installer upgrades Sombra in place; your config, models and meeti
 Sombra.app is signed with the project's own certificate, not an Apple Developer ID, so Apple has not notarized it ([ADR 0050](adr/0050-macos-app-bundle.md#gatekeeper-without-notarization)). macOS blocks such an app only when it carries the quarantine flag that browsers add to downloads:
 
 - **`install.sh`:** nothing to do. `curl` sets no quarantine, and the installer removes it anyway.
-- **Homebrew:** Homebrew quarantines what it downloads, and the cask does not remove the flag yet (#51). Open Sombra once, then follow the steps below for a browser download.
+- **Homebrew:** install with `--no-quarantine` ([Homebrew](#homebrew-macos)). The cask never removes the flag itself, so without that option, follow the steps below as for a browser download. `install.sh` does strip the flag, but only on the app it installed, because you ran that script explicitly.
 - **You downloaded the zip in a browser:** after moving `Sombra.app` to Applications, either run
 
   ```sh
