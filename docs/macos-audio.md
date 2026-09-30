@@ -127,6 +127,23 @@ Not every `lost` is a failure. A deliberate move to a better device is reported 
 `reopened with EU` / `reopened with OUTROS` (the other channel, reopened because PortAudio
 had to re-enumerate). Show those as "switching" rather than "source lost".
 
+## Stopping
+
+`MacAudioSource.close()` (Ctrl+C in `sombra start`) aborts both streams and destroys
+the process tap on a daemon thread, and waits at most 5 s for it (`close_timeout_s`,
+`CLOSE_TIMEOUT_S` in `sombra/audio/macos.py`). Core Audio can deadlock inside PortAudio's
+stop (#75); when it does, the log says which step is stuck, for example
+
+```
+audio: shutdown stuck aborting the EU stream after 5.0 s (Core Audio deadlock?); abandoning it so the session can finish
+```
+
+and the session goes on to write the minutes. PortAudio is then not terminated at exit,
+so the exit cannot hang on the same lock; the OS releases the devices with the process.
+Streams are aborted rather than stopped: the chunks already delivered are all that
+matter at shutdown. On macOS abort goes through the same PortAudio path as stop, so it
+can hit the same deadlock, which is why the timeout is there.
+
 ## Checking it on your Mac
 
 ```sh

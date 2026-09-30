@@ -14,11 +14,22 @@ on its own whenever its replacement device is already enumerated (a headset unpl
 fall back to the built-in mic; the tap's aggregate device after an output switch). Only
 when a device must be (re)discovered (a headset plugged back in, a new process tap) are
 both channels reopened, and the status events show the other channel's short gap too.
+
+Shutdown (#75): :meth:`MacAudioSource.close` tears the supervisor, the streams and the
+tap down on a daemon thread and waits at most ``close_timeout_s`` for it. CoreAudio can
+deadlock inside PortAudio's stop (``AudioOutputUnitStop`` waiting on the HAL mutex while
+PortAudio's own start/stop listener holds the AU mutex); on the event loop that hung the
+whole session, minutes and the second Ctrl+C included. A stuck teardown is now logged and
+abandoned. Streams are *aborted*, not stopped: the chunks already delivered are all that
+matter at shutdown, and abort skips waiting for PortAudio's buffers to drain. On macOS
+abort goes through the same ``FinishStoppingStream`` and can hit the same deadlock, so it
+shortens a clean stop but does not replace the timeout.
 """
 
 from __future__ import annotations
 
 import asyncio
+import atexit
 import contextlib
 import importlib
 import logging
@@ -55,6 +66,10 @@ PROCESS_TAP = "process-tap"
 #: Every this-many failed attempts on a channel, re-enumerate devices even if the old
 #: enumeration still offers a candidate (it may be stale).
 REENUMERATE_EVERY = 3
+
+#: How long :meth:`MacAudioSource.close` waits for the streams and the tap to go down
+#: before it gives up on them (#75).
+CLOSE_TIMEOUT_S = 5.0
 
 _ID_SUFFIX = re.compile(r"^(.*)#\d+$")
 
@@ -111,6 +126,8 @@ class MacAudioSource:
         reconnect: supervise the channels and restart lost ones (A3).
         stall_timeout_s: a channel silent at the device level (no callbacks) this long
             is lost.
+        close_timeout_s: :meth:`close` waits this long for the device teardown, then
+            logs which step is stuck and returns anyway.
     """
 
     def __init__(
@@ -130,6 +147,7 @@ class MacAudioSource:
         stall_timeout_s: float = 0.5,
         confirm_timeout_s: float = 1.0,
         backoff: Backoff | None = None,
+        close_timeout_s: float = CLOSE_TIMEOUT_S,
     ) -> None:
         self.mic = mic
         self.system = system
@@ -146,6 +164,9 @@ class MacAudioSource:
         self._stall_timeout_s = stall_timeout_s
         self._confirm_timeout_s = confirm_timeout_s
         self._backoff = backoff
+        self._close_timeout_s = close_timeout_s
+        # What the teardown thread is doing now, for the log if it gets stuck.
+        self._teardown_step = "not started"
         # Guards streams, devices and the tap: the reconnect thread reopens them.
         self._lock = threading.RLock()
         self._streams: dict[Channel, Any] = {}
@@ -188,24 +209,80 @@ class MacAudioSource:
         if self._closed:
             return
         self._closed = True
+        loop = asyncio.get_running_loop()
+        done: asyncio.Future[None] = loop.create_future()
+        finished = threading.Event()
+
+        def wake() -> None:
+            if not done.done():
+                done.set_result(None)
+
+        def run() -> None:
+            try:
+                self._teardown()
+            except Exception:
+                log.exception("error closing the audio source")
+            finally:
+                finished.set()
+                with contextlib.suppress(RuntimeError):  # the loop is gone: nobody waits
+                    loop.call_soon_threadsafe(wake)
+
+        # A daemon thread, not asyncio.to_thread: the default executor's threads are
+        # joined when asyncio.run() and the interpreter exit, so a stuck one hangs both.
+        thread = threading.Thread(target=run, name="sombra-audio-close", daemon=True)
+        thread.start()
+        try:
+            await asyncio.wait_for(done, self._close_timeout_s)
+        except TimeoutError:
+            log.error(
+                "audio: shutdown stuck %s after %.1f s (Core Audio deadlock?); "
+                "abandoning it so the session can finish",
+                self._teardown_step,
+                self._close_timeout_s,
+            )
+        finally:
+            if not finished.is_set():  # timed out, or a second Ctrl+C cancelled us
+                self._skip_portaudio_atexit()
+            self._queue.close()
+        if self.dropped_chunks:
+            log.warning("audio: dropped %s chunks (consumer too slow)", dict(self._queue.dropped))
+
+    def _teardown(self) -> None:
+        """Stop the supervisor and watcher, abort the streams, destroy the tap. Runs on
+        the ``sombra-audio-close`` thread; any step may block in Core Audio."""
         supervisor, self._supervisor = self._supervisor, None
-        if supervisor is not None:  # waits for a restart in progress
-            await asyncio.to_thread(supervisor.stop)
+        if supervisor is not None:
+            self._teardown_step = "stopping the reconnect supervisor"
+            supervisor.stop()  # waits for a restart in progress
         watcher, self._watcher = self._watcher, None
         if watcher is not None:
+            self._teardown_step = "stopping the device watcher"
             try:
                 watcher.stop()
             except Exception:
                 log.exception("error stopping the audio device watcher")
+        self._teardown_step = "waiting for the audio lock (a restart in progress)"
         with self._lock:
             for channel in list(self._streams):
-                self._close_channel(channel)
+                self._teardown_step = f"aborting the {channel.value} stream"
+                self._close_channel(channel, abort=True)
             if self._tap is not None:
-                self._tap.destroy()
+                self._teardown_step = "destroying the process tap"
+                try:
+                    self._tap.destroy()
+                except Exception:
+                    log.exception("error destroying the process tap")
                 self._tap = None
-        self._queue.close()
-        if self.dropped_chunks:
-            log.warning("audio: dropped %s chunks (consumer too slow)", dict(self._queue.dropped))
+        self._teardown_step = "done"
+
+    def _skip_portaudio_atexit(self) -> None:
+        """A stream is stuck in Core Audio: sounddevice's exit handler (``Pa_Terminate``)
+        would close it again and hang the exit on the same lock. Skip it; the OS frees
+        the devices with the process."""
+        handler = getattr(self._sd, "_exit_handler", None)
+        if handler is not None:
+            atexit.unregister(handler)
+            log.warning("audio: PortAudio will not be terminated at exit")
 
     # --- stats -------------------------------------------------------------------------
 
@@ -537,13 +614,17 @@ class MacAudioSource:
         sd._initialize()
         self._stale_names.clear()
 
-    def _close_channel(self, channel: Channel) -> None:
+    def _close_channel(self, channel: Channel, *, abort: bool = False) -> None:
         self._generation[channel] = self._generation.get(channel, 0) + 1
         self._devices.pop(channel, None)
         stream = self._streams.pop(channel, None)
         if stream is not None:
             try:
-                stream.stop()  # waits for a callback in flight
+                # Both wait for a callback in flight; abort drops the buffered audio.
+                if abort:
+                    stream.abort()
+                else:
+                    stream.stop()
                 stream.close()
             except Exception:  # a vanished device may fail to stop; keep going
                 log.exception("error closing audio stream on %s", channel.value)

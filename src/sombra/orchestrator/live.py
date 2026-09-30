@@ -228,7 +228,8 @@ async def _run_until_stopped(assembly: Assembly, stop: StopSignal) -> None:
 
 
 def run_in_terminal(plan: LivePlan, **kwargs: Any) -> None:  # pragma: no cover - live path
-    """Run on the main thread; the overlay opens in a browser tab. Ctrl+C stops."""
+    """Run on the main thread; the overlay opens in a browser tab. Ctrl+C stops, a
+    second Ctrl+C aborts. ``kwargs`` go to :func:`run_live` (tests pass fakes)."""
     from sombra.ui.window import open_in_browser
 
     stop = StopSignal()
@@ -241,7 +242,7 @@ def run_in_terminal(plan: LivePlan, **kwargs: Any) -> None:  # pragma: no cover 
             stop.request()
 
         loop.add_signal_handler(signal.SIGINT, on_sigint)
-        await run_live(plan, stop, on_ui_url=lambda url: _announce(url, open_in_browser))
+        await run_live(plan, stop, on_ui_url=lambda url: _announce(url, open_in_browser), **kwargs)
 
     asyncio.run(main())
 
@@ -290,12 +291,24 @@ def run_with_window(plan: LivePlan, shortcut: str) -> None:  # pragma: no cover 
             hotkey.stop()
         stop.request()
         try:
-            thread.join()
+            join_interruptibly(thread)
         except KeyboardInterrupt:
             sys.stderr.write("sombra: abortado; a ata não foi gravada\n")
             raise
     if errors:
         raise errors[0]
+
+
+def join_interruptibly(thread: threading.Thread, poll_s: float = 0.2) -> None:
+    """``thread.join()`` that a Ctrl+C can interrupt (#75).
+
+    Python runs signal handlers only on the main thread, between bytecodes, and the OS
+    may deliver SIGINT to any thread. A plain ``join()`` waits in C (on macOS, a
+    condition variable that a signal on another thread never wakes), so a second
+    Ctrl+C during a slow shutdown was never handled. Waking up every ``poll_s`` is.
+    """
+    while thread.is_alive():
+        thread.join(poll_s)
 
 
 def _toggle(pause: PauseController) -> None:
