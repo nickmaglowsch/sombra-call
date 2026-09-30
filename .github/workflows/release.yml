@@ -291,7 +291,7 @@ jobs:
         run: |
           uv run --no-project --python 3.12 packaging/macos/sign.py "$APP" --identity "$SHA1"
           codesign -dv --verbose=4 "$APP" 2>&1 | grep -E '^(Identifier|Authority|TeamIdentifier|CodeDirectory)'
-          dr=$(codesign -d -r- "$APP" 2>/dev/null | sed -n 's/^designated => //p')
+          dr=$(codesign -d -r- "$APP" 2>/dev/null | sed -n 's/^#* *designated => //p')
           echo "designated => $dr"
           echo "$dr" | grep -q 'identifier "io.github.nickmaglowsch.Sombra"'
           echo "$dr" | grep -qiE "certificate (leaf|root) = H\"$SHA1\""
@@ -313,7 +313,7 @@ jobs:
           codesign --verify -R="$DR_SELF" "$next/self/Sombra.app"
           echo "self-signed: the next build satisfies the stored requirement -> grants persist"
           if [ "$SIGN" != true ]; then
-            dr_adhoc=$(codesign -d -r- "$ADHOC" 2>/dev/null | sed -n 's/^designated => //p')
+            dr_adhoc=$(codesign -d -r- "$ADHOC" 2>/dev/null | sed -n 's/^#* *designated => //p')
             echo "ad-hoc requirement: $dr_adhoc"
             ditto "$ADHOC" "$next/adhoc/Sombra.app"
             plutil -replace CFBundleVersion -string "next" "$next/adhoc/Sombra.app/Contents/Info.plist"

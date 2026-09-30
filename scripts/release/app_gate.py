@@ -116,10 +116,14 @@ def parse_codesign_display(text: str) -> Signature:
 
 
 def parse_requirement(text: str) -> str:
-    """``codesign -d -r-`` output -> the designated requirement expression."""
+    """``codesign -d -r-`` output -> the designated requirement expression.
+
+    An ad-hoc signature's requirement is implicit, and codesign prints it commented out:
+    ``# designated => cdhash H"..."``.
+    """
     for line in text.splitlines():
         key, sep, value = line.partition("=>")
-        if sep and key.strip() == "designated":
+        if sep and key.strip().lstrip("#").strip() == "designated":
             return value.strip()
     return ""
 

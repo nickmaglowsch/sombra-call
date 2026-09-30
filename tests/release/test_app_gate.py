@@ -105,6 +105,8 @@ def test_parse_requirement() -> None:
     out = f"Executable=/x/Sombra.app/Contents/MacOS/Sombra\ndesignated => {PINNED_DR}\n"
     assert app_gate.parse_requirement(out) == PINNED_DR
     assert app_gate.parse_requirement("nothing here\n") == ""
+    adhoc = '# designated => cdhash H"9eef7d9d1220696fd7c5183337dee1d56e6e228c"\n'
+    assert app_gate.parse_requirement(adhoc) == 'cdhash H"9eef7d9d1220696fd7c5183337dee1d56e6e228c"'
 
 
 @pytest.mark.parametrize(
