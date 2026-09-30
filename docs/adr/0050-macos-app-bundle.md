@@ -109,17 +109,17 @@ A shell script can't set spawn attributes, and `open -a Sombra` (LaunchServices)
 
 Notarization would require the hardened runtime; we don't notarize, so it is a choice. We keep it, because Sombra holds Microphone and Screen Recording grants. Without the hardened runtime, any local process could inject a dylib into Sombra with `DYLD_INSERT_LIBRARIES`, or attach a debugger, and use those grants: a known class of TCC bypass. CI shows it costs nothing. The ad-hoc and the self-signed builds, both with the hardened runtime, run `replay` (onnxruntime, whisper.cpp with Metal) and `doctor`.
 
-A self-signed certificate has no Team ID, and neither does an ad-hoc signature. Library validation then accepts our own dylibs, which carry the same (empty) team; CI confirms the bundle loads.
+A self-signed certificate has no Team ID, and neither does an ad-hoc signature. On macOS 14, library validation still accepts our own dylibs, which carry the same (empty) team, and CI on `macos-14` loads the bundle. **macOS 27 does not.** It refuses every non-platform dylib of an app with no Team ID. The v0.1.0-rc1 app, signed by the pinned certificate, stops before Python starts ([Evidence](#evidence-from-a-real-mac-macos-27)). So the app turns library validation off. The hardened runtime stays on. It still refuses `DYLD_INSERT_LIBRARIES` (we don't carry `allow-dyld-environment-variables`) and debugger attach (no `get-task-allow`), which is the injection route the grants need protecting from. What turning it off costs is that Sombra would now load a dylib signed by someone else from a path it loads code from. Those paths are inside the sealed bundle, which macOS's App Management protection guards in `/Applications`. The PyInstaller bootloader also ignores `PYTHONPATH` and the other `PYTHON*` variables. A Developer ID (a real Team ID) would let us turn library validation back on.
 
-The app carries **one** entitlement:
+The app carries **two** entitlements:
 
 | Entitlement | Why |
 | --- | --- |
 | `com.apple.security.device.audio-input` | Microphone (EU track). Under the hardened runtime, audio input is refused without it, even when the user granted Microphone. The Core Audio process tap goes through the same audio stack. |
+| `com.apple.security.cs.disable-library-validation` | macOS 27 refuses to load our own dylibs (libpython first) into an app with no Team ID: `mapping process and mapped file (non-platform) have different Team IDs`. Without it the app does not start on macOS 27, whether it is ad-hoc or self-signed. |
 
 Considered and left out, since nothing we run needs them. The rule: add one only with evidence that the app fails without it.
 
-- `com.apple.security.cs.disable-library-validation`: every dylib and extension module in the bundle is signed by us, as above.
 - `com.apple.security.cs.allow-unsigned-executable-memory` / `allow-jit`: onnxruntime, whisper.cpp (Metal shaders compile in a system service, not in our process) and numpy generate no code. The libffi closures used by ctypes, cffi (sounddevice's stream callback) and pyobjc use trampoline tables on arm64 macOS, not writable+executable pages.
 - `com.apple.security.cs.allow-dyld-environment-variables`: the bootloader finds its libraries with `@rpath`/`@loader_path`, not `DYLD_*`.
 - `com.apple.security.automation.apple-events`: notifications go through `osascript display notification`, a separate process, and we send no Apple Events.
@@ -235,6 +235,27 @@ codesign --verify -R='cdhash H"6a73…"' next/adhoc/Sombra.app
 **Gatekeeper.** app-smoke writes `com.apple.quarantine` on the zip (as Safari would) before `install.sh`. Afterwards no file in `/Applications/Sombra.app` carries it.
 
 **Release gate.** The first run's ad-hoc app was recorded and rejected for a final release, although under the Developer ID rules this ADR replaced. Its self-signed-era equivalent is `not release-ready: signature is adhoc, …`. In run 36650828166, app-smoke (selfsigned-test) passed both of its gate checks: `app_gate.py ready` pinned to the twin's own certificate passed, and pinned to another certificate it failed. The same job also passed `doctor`'s "app signature" check (`signed with the certificate 'Sombra CI Throwaway': the grants survive upgrades`) and `replay`. The unit tests in `tests/release/test_app_gate.py` cover the decision itself (ad-hoc or wrong certificate on a final tag → refused).
+
+## Evidence from a real Mac (macOS 27)
+
+On the owner's Apple Silicon Mac, macOS 27.0 (26A428), installing v0.1.0-rc1 with `install.sh --version v0.1.0-rc1` stopped at `sombra --version`:
+
+```
+[PYI-8017:ERROR] Failed to load Python shared library '/Applications/Sombra.app/Contents/Frameworks/libpython3.12.dylib':
+  ... code signature in <…> '…/libpython3.12.dylib' not valid for use in process:
+  mapping process and mapped file (non-platform) have different Team IDs
+```
+
+Every Mach-O had `Authority=Sombra Code Signing`, `TeamIdentifier=not set` and `flags=0x10000(runtime)`, and `codesign --verify --deep --strict` passed. The same app was copied and re-signed with `sign.py` in four ways, then run as `Contents/MacOS/Sombra --version`:
+
+| Signature | Entitlements | Result |
+| --- | --- | --- |
+| ad-hoc | audio-input | fails (same error) |
+| a throwaway self-signed certificate | audio-input | fails (same error) |
+| a throwaway self-signed certificate | audio-input + disable-library-validation | `sombra 0.1.0rc1` |
+| ad-hoc | audio-input + disable-library-validation | `sombra 0.1.0rc1` |
+
+With the entitlement, `sombra doctor` through the shim reported `permissions holder: Sombra (io.github.nickmaglowsch.Sombra)`, `app signature: signed with the certificate …: the grants survive upgrades` and `default input: MacBook Pro Microphone`. The designated requirement still pins the certificate: `identifier "io.github.nickmaglowsch.Sombra" and certificate root = H"…"`.
 
 ## Consequences
 

@@ -72,7 +72,10 @@ def test_infoplist_strings_format() -> None:
 def test_entitlements_are_only_what_the_adr_justifies() -> None:
     path = ROOT / "packaging" / "macos" / "entitlements.plist"
     entitlements = plistlib.loads(path.read_bytes())
-    assert entitlements == {"com.apple.security.device.audio-input": True}
+    assert entitlements == {
+        "com.apple.security.device.audio-input": True,
+        "com.apple.security.cs.disable-library-validation": True,
+    }
     adr = next((ROOT / "docs" / "adr").glob("0050-*.md")).read_text(encoding="utf-8")
     for key in entitlements:
         assert key in adr

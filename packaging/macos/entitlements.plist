@@ -8,5 +8,11 @@
 	     without it, even when the user has granted Microphone in TCC. -->
 	<key>com.apple.security.device.audio-input</key>
 	<true/>
+	<!-- Our own dylibs (libpython, onnxruntime, whisper.cpp, PortAudio, extension modules).
+	     A self-signed or ad-hoc signature has no Team ID, and macOS 27 library validation
+	     refuses every non-platform dylib of such an app ("different Team IDs"), so the app
+	     cannot start without it. macOS 14 accepts the empty team. -->
+	<key>com.apple.security.cs.disable-library-validation</key>
+	<true/>
 </dict>
 </plist>
