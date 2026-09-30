@@ -100,6 +100,8 @@ async def test_replay_writes_transcript_frames_trigger_suggestion_and_action(
     assert (meeting / "frames" / "f0001.jpg").is_file()
     index = (meeting / "frames" / "index.jsonl").read_text().splitlines()
     assert len(index) == 1  # the second screenshot is a duplicate
+    raw = (meeting / "transcript.md").read_text(encoding="utf-8").splitlines()
+    assert sum(" TELA f0001 " in line for line in raw) == 1  # one marker per kept frame (#41)
 
     events = read_log(meeting)
     assert [e["type"] for e in events] == ["trigger", "suggestion", "action"]
