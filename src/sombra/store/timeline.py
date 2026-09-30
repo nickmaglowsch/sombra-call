@@ -20,7 +20,6 @@ from types import TracebackType
 from typing import BinaryIO, Self
 
 from sombra.contracts import (
-    FrameMarker,
     FrameRecord,
     LogEvent,
     TimelineEntry,
@@ -78,19 +77,14 @@ class MeetingStore:
             self._write(self._transcript, line)
 
     def append_frame(self, record: FrameRecord) -> None:
-        """Write the index record, then its ``TELA`` marker (same id and timestamp).
+        """Write the index record only; nothing goes to ``transcript.md`` (#41).
 
-        The index goes first so a marker never points at a frame missing from the index.
+        The caller appends the frame's ``FrameMarker`` with ``append_entry`` afterwards,
+        in timeline order, so a marker never points at a frame missing from the index.
         """
-        marker = FrameMarker(
-            ts=_align_tz(record.ts, self._day),
-            frame_id=record.id,
-            window_title=record.window_title or record.app or "",
-        )
-        index_line, marker_line = to_json_line(record), marker.to_line()
+        line = to_json_line(record)
         with self._lock:
-            self._write(self._index, index_line)
-            self._write(self._transcript, marker_line)
+            self._write(self._index, line)
 
     def log(self, event: LogEvent) -> None:
         line = to_json_line(event)
