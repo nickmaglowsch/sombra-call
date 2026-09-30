@@ -423,6 +423,10 @@ def run(
     details = [f"modelo: {r.model}", f"{result.elapsed_s:.1f} s"]
     if r.frames_sent:
         details.append("telas: " + ", ".join(r.frames_sent))
+    if result.dropped_citations:
+        details.append(
+            "horários fora da transcrição removidos: " + ", ".join(result.dropped_citations)
+        )
     u = r.usage
     details.append(
         f"tokens: {u.input_tokens} in, {u.output_tokens} out, "
