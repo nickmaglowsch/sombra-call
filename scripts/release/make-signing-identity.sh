@@ -97,10 +97,13 @@ openssl req -x509 -newkey rsa:3072 -sha256 -days "$DAYS" -nodes \
 openssl x509 -in "$work/cert.pem" -outform DER -out "$cer"
 
 password="$(openssl rand -hex 24)"
+# The password reaches openssl through the environment, never argv (visible in `ps`).
+SOMBRA_P12_PASSWORD="$password"
+export SOMBRA_P12_PASSWORD
 # SHA1-3DES keeps the .p12 importable by macOS `security import` (it rejects the newer
 # PBES2 defaults of OpenSSL 3 on some releases).
 openssl pkcs12 -export -inkey "$work/key.pem" -in "$work/cert.pem" -name "$NAME" \
-    -out "$p12" -passout "pass:$password" \
+    -out "$p12" -passout env:SOMBRA_P12_PASSWORD \
     -keypbe PBE-SHA1-3DES -certpbe PBE-SHA1-3DES -macalg sha1
 
 fingerprint() {

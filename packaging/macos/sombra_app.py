@@ -13,7 +13,9 @@ import re
 from typing import Any
 
 # Stable forever: TCC keys the Microphone / Screen Recording / Accessibility grants on the
-# bundle id plus the Developer ID team. Changing it makes every user grant them again.
+# bundle id plus the app's designated requirement, which pins the project's self-signed
+# certificate (packaging/macos/signing-cert.sha256). Changing either makes every user
+# grant them again.
 BUNDLE_ID = "io.github.nickmaglowsch.Sombra"
 APP_NAME = "Sombra"
 APP_DIR = f"{APP_NAME}.app"

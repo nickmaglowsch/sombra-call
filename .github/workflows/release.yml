@@ -293,6 +293,7 @@ jobs:
           codesign -dv --verbose=4 "$APP" 2>&1 | grep -E '^(Identifier|Authority|TeamIdentifier|CodeDirectory)'
           dr=$(codesign -d -r- "$APP" 2>/dev/null | sed -n 's/^#* *designated => //p')
           echo "designated => $dr"
+          if [ -z "$dr" ]; then echo "::error::could not read the designated requirement"; exit 1; fi
           echo "$dr" | grep -q 'identifier "io.github.nickmaglowsch.Sombra"'
           echo "$dr" | grep -qiE "certificate (leaf|root) = H\"$SHA1\""
           if echo "$dr" | grep -q cdhash; then echo "::error::the requirement pins the cdhash"; exit 1; fi
@@ -315,6 +316,7 @@ jobs:
           if [ "$SIGN" != true ]; then
             dr_adhoc=$(codesign -d -r- "$ADHOC" 2>/dev/null | sed -n 's/^#* *designated => //p')
             echo "ad-hoc requirement: $dr_adhoc"
+            if [ -z "$dr_adhoc" ]; then echo "::error::could not read the ad-hoc requirement"; exit 1; fi
             ditto "$ADHOC" "$next/adhoc/Sombra.app"
             plutil -replace CFBundleVersion -string "next" "$next/adhoc/Sombra.app/Contents/Info.plist"
             uv run --no-project --python 3.12 packaging/macos/sign.py "$next/adhoc/Sombra.app" --identity -

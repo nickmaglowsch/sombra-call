@@ -30,7 +30,7 @@ fi
 
 kc_pass="$(openssl rand -hex 24)"
 security create-keychain -p "$kc_pass" "$keychain"
-security set-keychain-settings -lut 21600 "$keychain"
+security set-keychain-settings -lut 3600 "$keychain"
 security unlock-keychain -p "$kc_pass" "$keychain"
 security import "$p12" -k "$keychain" -P "$password" -T /usr/bin/codesign
 # Let codesign use the key without a UI prompt.
@@ -41,7 +41,11 @@ security list-keychains -d user -s "$keychain" $(security list-keychains -d user
 
 cert="$(mktemp)"
 trap 'rm -f "$cert"' EXIT
-openssl pkcs12 -in "$p12" -passin "pass:$password" -nokeys -clcerts |
+# The password reaches openssl through the environment, never argv (visible in `ps`).
+# (`security import -P` has no such option; it runs on a throwaway CI runner.)
+SOMBRA_P12_PASSWORD="$password"
+export SOMBRA_P12_PASSWORD
+openssl pkcs12 -in "$p12" -passin env:SOMBRA_P12_PASSWORD -nokeys -clcerts |
     openssl x509 -outform PEM >"$cert"
 fingerprint() {
     openssl x509 -in "$cert" -noout -fingerprint "-$1" | sed 's/.*=//' | tr -d ':' | tr 'A-F' 'a-f'
