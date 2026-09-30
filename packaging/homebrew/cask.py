@@ -33,7 +33,7 @@ TEMPLATE = Path(__file__).resolve().with_name("sombra.rb.tmpl")
 CASK_PATH = Path("Casks") / "sombra.rb"
 # The CLI shim inside the bundle (#50). Homebrew links it into its bin directory, and it
 # launches through the bundle so macOS attributes the TCC grants to Sombra.
-SHIM = "Sombra.app/Contents/Resources/bin/sombra"
+SHIM = "Sombra.app/Contents/Helpers/sombra"
 # The URL keeps ``#{version}`` so the cask reads like any other and livecheck can follow it.
 DEFAULT_URL = (
     f"https://github.com/{REPO}/releases/download/v#{{version}}/Sombra-#{{version}}-macos-arm64.zip"

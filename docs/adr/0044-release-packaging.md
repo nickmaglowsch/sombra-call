@@ -93,6 +93,6 @@ macOS attributes Microphone, Screen Recording and Accessibility to the **respons
 
 ## Follow-ups
 
-- Signed and notarized macOS `.app`, so the TCC grants belong to Sombra: #50.
+- Signed and notarized macOS `.app`, so the TCC grants belong to Sombra: #50, decided in [ADR 0050](0050-macos-app-bundle.md).
 - A Homebrew tap that installs the released wheel: #51.
 - `sombra replay` with the fake brain in the smoke job: done once #17 merged (the e2e fixture, whisper tiny).

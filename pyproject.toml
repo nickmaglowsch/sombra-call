@@ -31,6 +31,10 @@ window = [
 ]
 
 [dependency-groups]
+# PyInstaller builds the macOS Sombra.app (packaging/macos, ADR 0050); not installed by default.
+app = [
+    "pyinstaller>=6.22.3",
+]
 dev = [
     "mypy>=1.11",
     "pytest>=8.3",
@@ -80,6 +84,7 @@ ignore = ["RUF001", "RUF002", "RUF003"]  # PT-BR text contains ambiguous-looking
 "tests/**" = ["S101", "S311"]
 "src/sombra/cli.py" = ["T20"]
 "scripts/**" = ["T20"]
+"packaging/**" = ["T20"]
 
 [tool.mypy]
 python_version = "3.12"

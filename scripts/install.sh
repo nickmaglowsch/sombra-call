@@ -4,12 +4,16 @@
 #   curl -fsSL https://github.com/nickmaglowsch/sombra-call/releases/latest/download/install.sh | sh
 #   curl -fsSL .../install.sh | sh -s -- --version v0.2.0 --yes
 #   sh scripts/install.sh --from-wheel dist/sombra-0.2.0-py3-none-any.whl --yes --no-models
+#   sh scripts/install.sh --from-app-zip Sombra-0.2.0-macos-arm64.zip --yes --no-models
 #   sh scripts/install.sh --uninstall
 #
-# Installs uv (user directory, no sudo) if missing, then Sombra as a uv tool on a
-# uv-managed Python 3.12, downloads the local models, writes the default config and
-# runs `sombra doctor`. Re-running upgrades in place. No telemetry; every step is echoed.
-# See docs/install.md.
+# On macOS it installs Sombra.app (into /Applications, or ~/Applications), signed with the
+# project's own certificate, and links its CLI shim onto PATH, so macOS grants the
+# permissions to Sombra (ADR 0050).
+# Elsewhere, or with --no-app, it installs uv (user directory, no sudo) if missing, then
+# Sombra as a uv tool on a uv-managed Python 3.12. Then it downloads the local models,
+# writes the default config and runs `sombra doctor`. Re-running upgrades in place.
+# No telemetry; every step is echoed. See docs/install.md.
 
 set -eu
 
@@ -19,9 +23,14 @@ UV_INSTALLER_URL="https://astral.sh/uv/install.sh"
 # Ubuntu packages the installer itself needs (curl for downloads, CA certificates for
 # HTTPS). Sombra's Python dependencies ship manylinux wheels and need nothing else yet.
 APT_PACKAGES="curl ca-certificates"
+# Sombra.app (packaging/macos/sombra_app.py; a test checks these agree with it).
+BUNDLE_ID="io.github.nickmaglowsch.Sombra"
+SHIM_RELPATH="Contents/Helpers/sombra"
 
 VERSION="latest"
 FROM_WHEEL=""
+FROM_APP_ZIP=""
+NO_APP=0
 ASSUME_YES=0
 NO_MODELS=0
 MODIFY_PATH=0
@@ -31,6 +40,7 @@ TMP_DIR=""
 UV=""
 SOMBRA=""
 BIN_DIR=""
+APP_PATH=""
 
 usage() {
     cat <<'EOF'
@@ -38,11 +48,16 @@ Usage: install.sh [options]
 
   --version vX.Y.Z   install this release (default: latest)
   --from-wheel PATH  install a local wheel instead of a release (testing, CI)
+  --from-app-zip PATH
+                     macOS: install a local Sombra-<version>-macos-arm64.zip
+  --no-app           macOS: install with uv (grants go to your terminal app)
+                     instead of Sombra.app
   --yes              non-interactive: answer yes to every question
   --no-models        skip downloading the whisper and Silero VAD models
-  --modify-path      add uv's tool bin directory to your shell rc file
-  --uninstall        remove Sombra (and, after confirmation, the models);
-                     never touches ~/Sombra/meetings or ~/.config/sombra
+  --modify-path      add the directory sombra is linked into to your shell rc file
+  --uninstall        remove Sombra (Sombra.app and/or the uv tool, and after
+                     confirmation the models); never touches ~/Sombra/meetings
+                     or ~/.config/sombra
   -h, --help         show this help
 EOF
 }
@@ -108,6 +123,19 @@ parse_args() {
                 FROM_WHEEL="${1#--from-wheel=}"
                 shift
                 ;;
+            --from-app-zip)
+                [ $# -ge 2 ] || die "--from-app-zip needs a path to a .zip file"
+                FROM_APP_ZIP="$2"
+                shift 2
+                ;;
+            --from-app-zip=*)
+                FROM_APP_ZIP="${1#--from-app-zip=}"
+                shift
+                ;;
+            --no-app)
+                NO_APP=1
+                shift
+                ;;
             --yes | -y)
                 ASSUME_YES=1
                 shift
@@ -146,6 +174,16 @@ parse_args() {
             *.whl) ;;
             *) die "--from-wheel: not a .whl file: $FROM_WHEEL" ;;
         esac
+    fi
+    if [ -n "$FROM_APP_ZIP" ]; then
+        [ -f "$FROM_APP_ZIP" ] || die "--from-app-zip: no such file: $FROM_APP_ZIP"
+        case "$FROM_APP_ZIP" in
+            *.zip) ;;
+            *) die "--from-app-zip: not a .zip file: $FROM_APP_ZIP" ;;
+        esac
+        if [ -n "$FROM_WHEEL" ] || [ "$NO_APP" -eq 1 ]; then
+            die "--from-app-zip cannot be combined with --from-wheel or --no-app"
+        fi
     fi
 }
 
@@ -287,29 +325,46 @@ release_base_url() {
     fi
 }
 
-# Downloads the release wheel into $TMP_DIR, verifies it against SHA256SUMS, prints its path.
-download_release_wheel() {
+# Downloads the release's SHA256SUMS into $TMP_DIR (once).
+fetch_sums() {
+    [ -f "$TMP_DIR/SHA256SUMS" ] && return 0
     base="$(release_base_url)"
     say "Downloading Sombra ($VERSION) from $base" >&2
     printf '+ curl -fsSL -o SHA256SUMS %s/SHA256SUMS\n' "$base" >&2
     curl -fsSL -o "$TMP_DIR/SHA256SUMS" "$base/SHA256SUMS" ||
         die "could not download $base/SHA256SUMS (does release $VERSION exist?)"
-    line="$(grep -E '[[:space:]]\*?sombra-[^[:space:]]*-py3-none-any\.whl$' "$TMP_DIR/SHA256SUMS" | head -n 1 || true)"
-    [ -n "$line" ] || die "SHA256SUMS lists no sombra wheel"
+}
+
+# download_release_asset ERE: downloads the asset SHA256SUMS lists under a name matching
+# ERE into $TMP_DIR, verifies it, prints its path. Exits 3 when no asset matches.
+download_release_asset() {
+    fetch_sums
+    base="$(release_base_url)"
+    line="$(grep -E "[[:space:]]\\*?$1\$" "$TMP_DIR/SHA256SUMS" | head -n 1 || true)"
+    [ -n "$line" ] || exit 3
     expected="$(printf '%s' "$line" | awk '{print $1}')"
-    wheel="$(printf '%s' "$line" | awk '{print $2}')"
-    wheel="${wheel#\*}"
-    case "$wheel" in
-        */* | *..*) die "unexpected wheel name in SHA256SUMS: $wheel" ;;
+    asset="$(printf '%s' "$line" | awk '{print $2}')"
+    asset="${asset#\*}"
+    case "$asset" in
+        */* | *..*) die "unexpected asset name in SHA256SUMS: $asset" ;;
     esac
-    printf '+ curl -fsSL -o %s %s/%s\n' "$wheel" "$base" "$wheel" >&2
-    curl -fsSL -o "$TMP_DIR/$wheel" "$base/$wheel" || die "could not download $base/$wheel"
-    actual="$(sha256_of "$TMP_DIR/$wheel")"
+    printf '+ curl -fsSL -o %s %s/%s\n' "$asset" "$base" "$asset" >&2
+    curl -fsSL -o "$TMP_DIR/$asset" "$base/$asset" || die "could not download $base/$asset"
+    actual="$(sha256_of "$TMP_DIR/$asset")"
     if [ "$actual" != "$expected" ]; then
-        die "checksum mismatch for $wheel: expected $expected, got $actual. Not installing."
+        die "checksum mismatch for $asset: expected $expected, got $actual. Not installing."
     fi
-    note "sha256 ok: $wheel" >&2
-    printf '%s\n' "$TMP_DIR/$wheel"
+    note "sha256 ok: $asset" >&2
+    printf '%s\n' "$TMP_DIR/$asset"
+}
+
+# Downloads the release wheel into $TMP_DIR, verifies it against SHA256SUMS, prints its path.
+download_release_wheel() {
+    rc=0
+    path="$(download_release_asset 'sombra-[^[:space:]/]*-py3-none-any\.whl')" || rc=$?
+    [ "$rc" -ne 3 ] || die "SHA256SUMS lists no sombra wheel"
+    [ "$rc" -eq 0 ] || exit "$rc"
+    printf '%s\n' "$path"
 }
 
 # --- install -----------------------------------------------------------------------------
@@ -329,6 +384,101 @@ install_sombra() {
     BIN_DIR="$("$UV" tool dir --bin)"
     SOMBRA="$BIN_DIR/sombra"
     [ -x "$SOMBRA" ] || die "sombra was not installed at $SOMBRA"
+    run "$SOMBRA" --version
+}
+
+# --- Sombra.app (macOS) -------------------------------------------------------------------
+
+bundle_id_of() {
+    plutil -extract CFBundleIdentifier raw -o - "$1/Contents/Info.plist" 2>/dev/null
+}
+
+default_bin_dir() {
+    printf '%s\n' "${XDG_BIN_HOME:-$HOME/.local/bin}"
+}
+
+# Where Sombra.app is installed (ours, by bundle id), or nothing.
+installed_app() {
+    for dir in "${SOMBRA_APP_DIR:-}" /Applications "$HOME/Applications"; do
+        [ -n "$dir" ] || continue
+        if [ -d "$dir/Sombra.app" ] && [ "$(bundle_id_of "$dir/Sombra.app" || true)" = "$BUNDLE_ID" ]; then
+            printf '%s\n' "$dir/Sombra.app"
+            return 0
+        fi
+    done
+    return 1
+}
+
+# Where a new install goes: $SOMBRA_APP_DIR, /Applications if writable, or ~/Applications.
+app_install_dir() {
+    if [ -n "${SOMBRA_APP_DIR:-}" ]; then
+        printf '%s\n' "$SOMBRA_APP_DIR"
+    elif [ -w /Applications ]; then
+        printf '%s\n' /Applications
+    else
+        printf '%s\n' "$HOME/Applications"
+    fi
+}
+
+# Installs Sombra.app, links its CLI shim and sets APP_PATH. Leaves APP_PATH empty when
+# the release has no app, so the caller falls back to the uv install.
+install_app() {
+    if [ -n "$FROM_APP_ZIP" ]; then
+        zip="$FROM_APP_ZIP"
+        say "Installing Sombra.app from $zip"
+    else
+        rc=0
+        zip="$(download_release_asset 'Sombra-[^[:space:]/]*-macos-arm64\.zip')" || rc=$?
+        if [ "$rc" -eq 3 ]; then
+            note "release $VERSION has no Sombra.app; installing with uv instead"
+            return 0
+        fi
+        [ "$rc" -eq 0 ] || exit "$rc"
+        say "Installing Sombra.app from the release"
+    fi
+    unpack="$TMP_DIR/app"
+    mkdir -p "$unpack"
+    run ditto -x -k "$zip" "$unpack"
+    [ -d "$unpack/Sombra.app" ] || die "$zip holds no Sombra.app"
+    got="$(bundle_id_of "$unpack/Sombra.app" || true)"
+    [ "$got" = "$BUNDLE_ID" ] || die "$zip holds an app with bundle id '$got', not $BUNDLE_ID"
+    run codesign --verify --deep --strict "$unpack/Sombra.app" ||
+        die "Sombra.app's code signature does not verify; not installing"
+    if codesign -dv "$unpack/Sombra.app" 2>&1 | grep -q '^Signature=adhoc'; then
+        warn "this Sombra.app is ad-hoc signed (a development build or a labelled pre-release): macOS will ask for the permissions again after every upgrade"
+    fi
+    if xattr -p com.apple.quarantine "$zip" >/dev/null 2>&1; then
+        note "$zip is quarantined (downloaded by a browser); the quarantine is removed below"
+    fi
+
+    if dest="$(installed_app)"; then
+        note "upgrading $dest (the permissions you granted stay)"
+        run rm -rf "$dest"
+    else
+        dir="$(app_install_dir)"
+        run mkdir -p "$dir"
+        dest="$dir/Sombra.app"
+        if [ -e "$dest" ]; then
+            die "$dest exists and is not Sombra ($BUNDLE_ID); move it away and re-run"
+        fi
+    fi
+    run ditto "$unpack/Sombra.app" "$dest"
+    # Sombra.app is self-signed, not notarized (ADR 0050), so Gatekeeper blocks it when it
+    # carries com.apple.quarantine. curl sets none, but a browser-downloaded zip does and
+    # ditto copies it into the app: remove it.
+    run xattr -dr com.apple.quarantine "$dest" 2>/dev/null || true
+    APP_PATH="$dest"
+
+    # The app replaces a uv-tool install: one sombra on PATH, and it is the app's.
+    if UV="$(find_uv)" && "$UV" tool list 2>/dev/null | grep -q '^sombra '; then
+        note "replacing the uv-tool install of sombra with Sombra.app"
+        run "$UV" tool uninstall sombra
+    fi
+    BIN_DIR="$(default_bin_dir)"
+    run mkdir -p "$BIN_DIR"
+    run ln -sfn "$APP_PATH/$SHIM_RELPATH" "$BIN_DIR/sombra"
+    SOMBRA="$BIN_DIR/sombra"
+    [ -x "$SOMBRA" ] || die "the CLI shim is missing from $APP_PATH"
     run "$SOMBRA" --version
 }
 
@@ -386,6 +536,18 @@ write_config() {
     run "$SOMBRA" config init
 }
 
+grant_hint() {
+    if [ -n "$APP_PATH" ]; then
+        printf '%s' "macOS asks you to grant Microphone, Screen Recording and Accessibility
+       to Sombra (System Settings > Privacy & Security lists Sombra)."
+    elif [ "$OS" = "Darwin" ]; then
+        printf '%s' "On macOS, grant Microphone, Screen Recording and Accessibility to the terminal
+       app you run sombra from (System Settings > Privacy & Security)."
+    else
+        printf '%s' "Linux needs no permission grants."
+    fi
+}
+
 run_doctor() {
     say "Running sombra doctor"
     run "$SOMBRA" doctor || true
@@ -393,8 +555,7 @@ run_doctor() {
 
 ==> Next steps
     1. Fix anything 'sombra doctor' marked FAIL or warn above, then run it again.
-       On macOS, grant Microphone, Screen Recording and Accessibility to the terminal
-       app you run sombra from (System Settings > Privacy & Security).
+       $(grant_hint)
     2. Choose the agent provider: 'sombra setup' (Claude or Codex, on your
        subscription or an API key; see docs/providers.md).
     3. First meeting: sombra start "Daily" on macOS (see docs/usage.md).
@@ -405,20 +566,40 @@ EOF
 
 uninstall() {
     say "Uninstalling Sombra"
-    if UV="$(find_uv)"; then
-        :
-    else
-        die "uv not found; nothing to uninstall"
+    app=""
+    if [ "$(uname -s)" = "Darwin" ]; then
+        app="$(installed_app || true)"
+    fi
+    UV="$(find_uv || true)"
+    if [ -z "$app" ] && [ -z "$UV" ]; then
+        die "neither Sombra.app nor uv found; nothing to uninstall"
     fi
     models_dir="$HOME/.cache/sombra/models"
-    bin="$("$UV" tool dir --bin)/sombra"
+    if [ -n "$app" ]; then
+        bin="$app/$SHIM_RELPATH"
+    else
+        bin="$("$UV" tool dir --bin)/sombra"
+    fi
     if [ -x "$bin" ]; then
         models_dir="$("$bin" models path 2>/dev/null || printf '%s' "$models_dir")"
     fi
-    if "$UV" tool list 2>/dev/null | grep -q '^sombra '; then
-        run "$UV" tool uninstall sombra
-    else
-        note "sombra is not installed as a uv tool"
+    if [ -n "$app" ]; then
+        run rm -rf "$app"
+        link="$(default_bin_dir)/sombra"
+        if [ -L "$link" ]; then
+            case "$(readlink "$link")" in
+                */Sombra.app/*) run rm -f "$link" ;;
+            esac
+        fi
+        note "macOS keeps the permissions you granted Sombra; to remove them too, run:"
+        note "  tccutil reset All $BUNDLE_ID"
+    fi
+    if [ -n "$UV" ]; then
+        if "$UV" tool list 2>/dev/null | grep -q '^sombra '; then
+            run "$UV" tool uninstall sombra
+        else
+            note "sombra is not installed as a uv tool"
+        fi
     fi
     if [ -d "$models_dir" ]; then
         case "$models_dir" in
@@ -444,7 +625,9 @@ uninstall() {
         fi
     fi
     note "kept your meetings (~/Sombra/meetings) and config (~/.config/sombra)"
-    note "uv itself was left installed"
+    if [ -n "$UV" ]; then
+        note "uv itself was left installed"
+    fi
 }
 
 main() {
@@ -453,11 +636,19 @@ main() {
         uninstall
         return 0
     fi
+    if [ -n "$FROM_APP_ZIP" ] && [ "$(uname -s)" != "Darwin" ]; then
+        die "--from-app-zip is for macOS only"
+    fi
     detect_platform
     TMP_DIR="$(mktemp -d)"
     install_system_packages
-    ensure_uv
-    install_sombra
+    if [ "$OS" = "Darwin" ] && [ "$NO_APP" -eq 0 ] && [ -z "$FROM_WHEEL" ]; then
+        install_app
+    fi
+    if [ -z "$APP_PATH" ]; then
+        ensure_uv
+        install_sombra
+    fi
     download_models
     check_path
     write_config

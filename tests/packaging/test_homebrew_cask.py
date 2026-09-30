@@ -5,10 +5,12 @@ on macos-14 in ``.github/workflows/homebrew.yml``; these tests pin the logic tha
 """
 
 import hashlib
+import importlib.util
 import re
 import shutil
 import subprocess
 from pathlib import Path
+from types import ModuleType
 
 import pytest
 from cask import (
@@ -420,3 +422,20 @@ def test_tap_bootstrap_has_the_layout_homebrew_expects() -> None:
     assert (tap / "Casks").is_dir()
     readme = (tap / "README.md").read_text()
     assert "brew install --cask nickmaglowsch/sombra/sombra" in readme
+
+
+def _sombra_app() -> ModuleType:
+    """``packaging/macos/sombra_app.py`` (#50): the one place the bundle layout lives."""
+    path = REPO_ROOT / "packaging" / "macos" / "sombra_app.py"
+    spec = importlib.util.spec_from_file_location("homebrew_test_sombra_app", path)
+    assert spec is not None and spec.loader is not None
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
+
+
+def test_cask_matches_the_app_bundle_layout() -> None:
+    app = _sombra_app()
+    assert f"{app.APP_DIR}/{app.SHIM_RELPATH}" == SHIM
+    assert f'app "{app.APP_DIR}"' in render("0.3.0", ZIP_SHA)
+    assert app.ZIP_TEMPLATE.format(version="0.3.0") == asset_name("0.3.0")

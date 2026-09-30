@@ -1,8 +1,12 @@
-"""Make ``scripts/release`` importable: its helpers run as plain scripts in the workflow."""
+"""Make ``scripts/release`` and ``packaging/macos`` importable: their helpers run as plain
+scripts in the workflows."""
 
 import sys
 from pathlib import Path
 
-RELEASE_SCRIPTS = Path(__file__).resolve().parents[2] / "scripts" / "release"
-if str(RELEASE_SCRIPTS) not in sys.path:
-    sys.path.insert(0, str(RELEASE_SCRIPTS))
+ROOT = Path(__file__).resolve().parents[2]
+RELEASE_SCRIPTS = ROOT / "scripts" / "release"
+MACOS_PACKAGING = ROOT / "packaging" / "macos"
+for path in (RELEASE_SCRIPTS, MACOS_PACKAGING):
+    if str(path) not in sys.path:
+        sys.path.insert(0, str(path))

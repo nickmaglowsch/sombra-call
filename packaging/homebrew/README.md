@@ -9,4 +9,4 @@
 | `ci.sh` | `audit` runs `brew style` and `brew audit --cask --strict`. `smoke` installs, runs `sombra --version`, then `uninstall --zap`, and checks that `~/Sombra/meetings` survives. Both use a throwaway local tap and run on macos-14. |
 | `tap/` | the bootstrap for the `nickmaglowsch/homebrew-sombra` repository: its README and the `Casks/` folder |
 
-The cask depends on the release asset from #50: `Sombra-<version>-macos-arm64.zip` (a ditto zip of `Sombra.app`) listed in `SHA256SUMS`, with the CLI shim at `Sombra.app/Contents/Resources/bin/sombra`. If #50 moves the shim, change `SHIM` in `cask.py`.
+The cask depends on the release asset from #50: `Sombra-<version>-macos-arm64.zip` (a ditto zip of `Sombra.app`) listed in `SHA256SUMS`, with the CLI shim at `Sombra.app/Contents/Helpers/sombra` (ADR 0050). `SHIM` in `cask.py` must match `SHIM_RELPATH` in `packaging/macos/sombra_app.py`; a test checks it.
