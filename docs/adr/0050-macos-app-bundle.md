@@ -185,9 +185,56 @@ Gatekeeper only assesses an app that carries the `com.apple.quarantine` extended
 
 ## Evidence from CI
 
-From the PR runs that built and smoke-tested the app (linked in the PR); every number comes from those runs.
+All numbers come from PR #62's Release runs on `macos-14` (macOS 14.8.9, arm64): [36648302872](https://github.com/nickmaglowsch/sombra-call/actions/runs/36648302872) (first ad-hoc build) and [36650828166](https://github.com/nickmaglowsch/sombra-call/actions/runs/36650828166) (self-signed free path).
 
-<!-- CI-EVIDENCE -->
+**Size and build.** `Sombra.app` is 137 MB on disk and holds 205 files, 84 of them Mach-O that `sign.py` signs. The zip (`ditto`) is 50 MB. Building takes about 20 s (PyInstaller) and the whole **app** job about 1 minute.
+
+**Native dependencies under the hardened runtime.** The ad-hoc app, installed through `install.sh` and run through the shim, passes:
+
+- `sombra --version`;
+- `sombra doctor --json`: pyobjc, AVFoundation, Quartz, ApplicationServices and PortAudio are all probed, and it reports "default input: Apple Virtual Sound Device" and "Core Audio process tap";
+- `sombra replay` on the e2e fixture: onnxruntime (Silero VAD) and whisper.cpp tiny with Metal (`ggml_metal_free: deallocating`) produce `['trigger', 'suggestion', 'action']`.
+
+**The shim makes Sombra the responsible process.** Through `~/.local/bin/sombra`:
+
+```
+permissions holder: ok  Sombra (io.github.nickmaglowsch.Sombra) at /Applications/Sombra.app: the grants belong to Sombra alone
+microphone: warn        not asked yet; macOS prompts Sombra the first time; ...
+```
+
+The control, `Sombra.app/Contents/MacOS/Sombra doctor` run directly, reports the runner's own process:
+
+```
+permissions holder: warn  hosted-compute-agent at /opt/hca/hosted-compute-agent, although sombra runs from /Applications/Sombra.app
+```
+
+**Designated requirements** (`codesign -d -r-`):
+
+```
+# ad-hoc (PR build, no secrets)
+# designated => cdhash H"6a73f53d4bfb859eef386e7555c5e22be21492df"
+
+# the same build signed with the job's throwaway self-signed certificate
+Authority=Sombra CI Throwaway
+TeamIdentifier=not set
+CodeDirectory v=20500 size=94687 flags=0x10000(runtime) hashes=2948+7 location=embedded
+designated => identifier "io.github.nickmaglowsch.Sombra" and certificate root = H"bcf07bb57ec61e37ce1719504e4e03783c02c9dd"
+```
+
+`security find-identity` listed that certificate as `CSSMERR_TP_NOT_TRUSTED` ("0 valid identities found"). `codesign` signed with it by hash anyway, and `codesign --verify --deep --strict` passed: trust is not needed.
+
+**Grants across an upgrade** (TCC re-checks the stored requirement against the new app). CI changed `CFBundleVersion` in a copy and re-signed it:
+
+```
+codesign --verify -R='identifier "io.github.nickmaglowsch.Sombra" and certificate root = H"bcf0…"' next/self/Sombra.app
+  -> satisfies it                                   self-signed: grants persist
+codesign --verify -R='cdhash H"6a73…"' next/adhoc/Sombra.app
+  -> test-requirement: code failed to satisfy specified code requirement(s)   ad-hoc: grants reset
+```
+
+**Gatekeeper.** app-smoke writes `com.apple.quarantine` on the zip (as Safari would) before `install.sh`. Afterwards no file in `/Applications/Sombra.app` carries it.
+
+**Release gate.** The first run's ad-hoc app was recorded and rejected for a final release, although under the Developer ID rules this ADR replaced. Its self-signed-era equivalent is `not release-ready: signature is adhoc, …`. On each run, app-smoke also checks two things for the throwaway-signed twin: `app_gate.py ready` pinned to its certificate must pass, and pinned to any other certificate it must fail. The unit tests in `tests/release/test_app_gate.py` cover the decision itself (ad-hoc or wrong certificate on a final tag → refused).
 
 ## Consequences
 
