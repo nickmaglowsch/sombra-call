@@ -397,10 +397,16 @@ default_bin_dir() {
     printf '%s\n' "${XDG_BIN_HOME:-$HOME/.local/bin}"
 }
 
-# Where Sombra.app is installed (ours, by bundle id), or nothing.
+# Where Sombra.app is installed (ours, by bundle id), or nothing. $SOMBRA_APP_DIR, when
+# set, is the only place looked at: the tests set it, and must never find (and upgrade or
+# uninstall) the real /Applications/Sombra.app.
 installed_app() {
-    for dir in "${SOMBRA_APP_DIR:-}" /Applications "$HOME/Applications"; do
-        [ -n "$dir" ] || continue
+    if [ -n "${SOMBRA_APP_DIR:-}" ]; then
+        set -- "$SOMBRA_APP_DIR"
+    else
+        set -- /Applications "$HOME/Applications"
+    fi
+    for dir in "$@"; do
         if [ -d "$dir/Sombra.app" ] && [ "$(bundle_id_of "$dir/Sombra.app" || true)" = "$BUNDLE_ID" ]; then
             printf '%s\n' "$dir/Sombra.app"
             return 0

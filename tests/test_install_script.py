@@ -87,6 +87,12 @@ def test_uninstall_deletes_only_downloaded_models_and_keeps_meetings(tmp_path: P
     meeting = home / "Sombra" / "meetings" / "2026-01-01_0900_x" / "transcript.md"
     meeting.parent.mkdir(parents=True)
     meeting.write_text("[09:00:00] EU: oi\n")
+    # SOMBRA_APP_DIR keeps the uninstall away from a real /Applications/Sombra.app.
+    env = {
+        "HOME": str(home),
+        "PATH": f"{fakebin}:/usr/bin:/bin",
+        "SOMBRA_APP_DIR": str(tmp_path / "Applications"),
+    }
 
     result = subprocess.run(  # noqa: S603  # fixed argv, no shell
         ["sh", str(SCRIPT), "--uninstall", "--yes"],  # noqa: S607
@@ -94,7 +100,7 @@ def test_uninstall_deletes_only_downloaded_models_and_keeps_meetings(tmp_path: P
         text=True,
         check=False,
         timeout=30,
-        env={"HOME": str(home), "PATH": f"{fakebin}:/usr/bin:/bin"},
+        env=env,
     )
     assert result.returncode == 0, result.stdout + result.stderr
     assert sorted(p.name for p in models.iterdir()) == ["mine.txt"]
@@ -109,7 +115,7 @@ def test_uninstall_deletes_only_downloaded_models_and_keeps_meetings(tmp_path: P
         text=True,
         check=False,
         timeout=30,
-        env={"HOME": str(home), "PATH": f"{fakebin}:/usr/bin:/bin"},
+        env=env,
     )
     assert result.returncode == 0, result.stdout + result.stderr
     assert not models.exists()
