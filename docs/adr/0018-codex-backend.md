@@ -1,8 +1,8 @@
 # ADR 0018: Codex backend through `codex exec`, confined by a read-only permission profile
 
 - Status: **provisional**. The design and the confinement flags come from the Codex source and its SDK docs. The development container has no OpenAI key, so the live checks (answers, latency, cost, injection) wait for a human run. See [Left for a human](#left-for-a-human). The tool set (#57) *was* verified against a real `codex-cli 0.159.1` with a request capture; see [Tools the model is offered](#tools-the-model-is-offered-57).
-- Date: 2026-09-29 (tool-set amendment for #57: 2026-09-29)
-- Issue: #18 (PRD C5, C2, C6, "Codex em sandbox read-only"); #57 (tools and the output allowlist)
+- Date: 2026-09-29 (tool-set amendment for #57: 2026-09-29; tool-call log for #74: 2026-09-30)
+- Issue: #18 (PRD C5, C2, C6, "Codex em sandbox read-only"); #57 (tools and the output allowlist); #74 (the allowlist was blind to sandbox-denied commands, which is every Seatbelt denial on macOS)
 - Numbering: this ADR uses the issue number, as ADR 0009 does.
 
 ## Context
@@ -23,7 +23,7 @@ What the Codex source says (openai/codex at `94d642d`, 2026-09-29; the same code
    - `--ignore-rules`, `--skip-git-repo-check`, `--cd DIR`, `--image FILE`, `--model`.
    - A prompt of `-` is read from stdin.
    - Approvals default to `never` in exec mode.
-5. **Events** (`exec/src/exec_events.rs`): `turn.completed` carries `usage {input_tokens, cached_input_tokens, cache_write_input_tokens, output_tokens, reasoning_output_tokens}`. `input_tokens` *includes* cached tokens (`TokenUsage::non_cached_input`). Items: `agent_message`, `command_execution`, `file_change`, `web_search`, `mcp_tool_call`, `collab_tool_call`, `reasoning`, `todo_list`, `error`. **Not every tool call becomes an item** (measured on 0.159.1, #57): a code-mode `exec` call and a `collaboration.spawn_agent` call both ran with no item in the JSONL. A shell call made from *inside* `exec` still shows up as `command_execution`.
+5. **Events** (`exec/src/exec_events.rs`): `turn.completed` carries `usage {input_tokens, cached_input_tokens, cache_write_input_tokens, output_tokens, reasoning_output_tokens}`. `input_tokens` *includes* cached tokens (`TokenUsage::non_cached_input`). Items: `agent_message`, `command_execution`, `file_change`, `web_search`, `mcp_tool_call`, `collab_tool_call`, `reasoning`, `todo_list`, `error`. **Not every tool call becomes an item** (measured on 0.159.1, #57): a code-mode `exec` call and a `collaboration.spawn_agent` call both ran with no item in the JSONL. A shell call made from *inside* `exec` still shows up as `command_execution`. **Nor does every shell call** (#74, see [The tool-call log](#the-tool-call-log-74)): a command Codex judges sandbox-denied at spawn emits no item either.
 6. **Other config.** `CODEX_API_KEY` in the environment authenticates `codex exec` (`login/src/auth/manager.rs`). `web_search = "disabled"`, `features.view_image = false`, `project_doc_max_bytes = 0` (no `AGENTS.md`) and `developer_instructions` are ordinary config keys.
 7. **Tools come from the model catalog, not only from feature flags** (measured on 0.159.1, #57). Each model in the bundled catalog (`codex debug models --bundled`) has fields that add tools: `tool_mode = "code_mode_only"`, `multi_agent_version = "v1" | "v2"`, `experimental_supported_tools`, `supports_search_tool` and `apply_patch_tool_type`. Ten of the eleven bundled models, including the default `gpt-6.1-sol`, are `code_mode_only` with multi-agent. `--disable` flags don't override these fields; `model_catalog_json = "<file>"` replaces the catalog. The table in [Tools the model is offered](#tools-the-model-is-offered-57) has the details.
 
@@ -53,7 +53,8 @@ What the Codex source says (openai/codex at `94d642d`, 2026-09-29; the same code
    - The process gets a minimal environment (`PATH`, `HOME`, locale, `TMPDIR`, `CODEX_HOME`, plus `CODEX_API_KEY` from the keychain callable). Other secrets in Sombra's environment never reach the agent's shell.
    - The API key goes in the environment only, never in argv or the prompt.
    - **The JSONL output is checked against an allowlist (#57).** This replaces the earlier denylist of `file_change`, `web_search`, `mcp_tool_call` and `collab_tool_call`, which let every other type through. Allowed events are `thread.started`, `turn.started`, `turn.completed`, `turn.failed`, `item.started`, `item.updated`, `item.completed` and `error`. Allowed items are `agent_message`, `reasoning`, `command_execution` and `error` (a warning such as "model metadata not found", which carries only a message). Anything else voids the answer with `BrainSandboxError` (`kind = "sandbox_violation"`). That includes an unknown type, an item without a type, and an item that is only started. This is the second line of defence. Fact 5 shows why it can't be the first: code mode and sub-agent calls emit no item at all.
-   - Every `command_execution` is kept in `CodexBrain.last_run` for audit.
+   - Every `command_execution` is kept in `CodexBrain.last_run` for audit, including one that has only `item.started` because it was still running when Codex exited (#74).
+   - **The JSONL is held to Codex's own tool-call log (#74).** Every run sets `RUST_LOG` so Codex prints its `codex_otel` events on stderr, and `reconcile_tool_calls` checks every tool call the model made against the items. See [The tool-call log](#the-tool-call-log-74).
 3. **Prompts come from `brain.prompt` (#8)** through the same `PromptKit` as Claude. `render_request` builds the Messages-shaped body; `flatten_request` then sends `system` as Codex **developer instructions** and the user content (context, epoch summary, transcript, tail) on **stdin**. Meeting content stays inside `<dados>` delimiters and never reaches the developer role. Image blocks are dropped from the text and the same frames go through `--image`; the `Imagem da tela fNNNN:` labels stay in the text in the same order.
 4. **Images stay out of history (C6)** by construction:
    - Each answer is a new process with `--ephemeral`, so no session or rollout file is written, and no later process can see an earlier image.
@@ -77,7 +78,7 @@ What the Codex source says (openai/codex at `94d642d`, 2026-09-29; the same code
    - The npm Node shim (`<pkg>/bin/codex.js`, a `#!` script) gives the native binary it starts: `@openai/codex-linux-<arch>/vendor/<triple>/bin/codex`, nested in `<pkg>/node_modules`, hoisted next to `<pkg>` (a pnpm store symlink resolves the same way), or `<pkg>/vendor/<triple>/bin/codex`. Only Linux triples count, and a symlinked binary is followed to its target.
    - Node is **not** added. The shim runs outside the sandbox, and only the native binary runs inside it. Measured: the command works with just that binary file added.
    - The grant is `read` on that one **file**, never its folder. The first version of this fix granted the folder and refused only `/`, `~` and the meetings folder. The #68 review showed the gap: a release binary unpacked into `~/Downloads` let the shell `cat ~/Downloads/notes.txt`. Codex's profile accepts file entries, and bubblewrap binds a file as readily as a folder, so nothing next to the binary is ever mounted, wherever the binary lives. `test_release_binary_in_a_user_folder_exposes_nothing_next_to_it` checks this live. With a folder grant it leaks the file next to the binary; with the file grant it doesn't.
-   - **macOS doesn't need this.** Seatbelt runs the command itself under `sandbox-exec` with the generated profile. Codex doesn't re-run its own binary inside that sandbox, so a Homebrew or npm prefix outside the Seatbelt read roots doesn't matter. `codex_read_paths` returns nothing there, and the profile stays `{":minimal", <meeting>}`. This comes from Codex's design; it hasn't been run on a Mac yet. `test_shell_reads_the_meeting_folder_and_nothing_else` checks it on the first capture run there (see "Left for a human").
+   - **macOS doesn't need this.** Seatbelt runs the command itself under `sandbox-exec` with the generated profile. Codex doesn't re-run its own binary inside that sandbox, so a Homebrew or npm prefix outside the Seatbelt read roots doesn't matter. `codex_read_paths` returns nothing there, and the profile stays `{":minimal", <meeting>}`. The owner's Mac run in #74 confirmed it: with codex-cli 0.159.1 on macOS 27.0, the transcript was readable and the sibling folder and `$HOME` gave `Operation not permitted`. The same run found the JSONL blind to that command, which the tool-call log fixes.
 
 ## Consequences
 
@@ -113,10 +114,11 @@ Forced tool calls (the fake endpoint's first reply is the call; the second reque
 
 | Forced call | #18 argv | Decision 1 argv |
 |---|---|---|
-| `exec` (custom tool, `text("hi")`) | ran (`Script completed … hi`); **no JSONL item** | `unsupported custom tool call: exec` |
-| `collaboration.spawn_agent` | reached the handler; it failed only because `--ephemeral` leaves no rollout for the child; **no JSONL item** | `unsupported call: collaborationspawn_agent` |
+| `exec` (custom tool, `text("hi")`) | ran (`Script completed … hi`); **no JSONL item** | `unsupported custom tool call: exec`; since #74 the tool-call log names it and the answer is void |
+| `collaboration.spawn_agent` | reached the handler; it failed only because `--ephemeral` leaves no rollout for the child; **no JSONL item** | `unsupported call: collaborationspawn_agent`; since #74 the tool-call log names it and the answer is void |
 | `exec` calling `tools.exec_command` | `command_execution` item | tool not offered |
 | `exec_command {"cmd": "ls"}` | `command_execution` item | `command_execution` item |
+| `exec_command` that exits within 150 ms, non-zero, printing `Operation not permitted` (#74) | — | runs; **no JSONL item**; seen in the tool-call log |
 | raw `local_shell_call` (from the PR #59 review's own probe) | — | dropped silently: nothing ran, no item, no follow-up request |
 | `web_search_call` (same probe) | — | a `web_search` item, which the allowlist voids |
 
@@ -133,13 +135,50 @@ What actually stops an agent driven by untrusted meeting text, strongest first:
 2. **The permission profile.** Reads are limited to the meeting folder plus `:minimal`, nothing is writable, and there is no network. Every shell command runs under it. On #55 the reviewer also saw it refuse `apply_patch` writes to the cwd and to `$HOME` made from inside code-mode `exec`.
 3. **The code-mode isolate has no file or network access.** This was observed on #55 before its tools were removed: `require`, `process`, `fetch` and `Deno` were undefined, and `import("fs")` was refused. It matters only if a future CLI brings `exec` back past layer 1.
 4. **`--ephemeral`.** It is required for C6. On 0.159.1 it is also why a forced `spawn_agent` failed: the child finds no rollout. `test_ephemeral_is_always_passed` pins it.
-5. **The JSONL allowlist.** This is a tripwire, not the enforcement. It voids the answer on any event or item it doesn't know, but it sees only what Codex reports. Code-mode `exec` and `spawn_agent` calls report nothing (fact 5).
+5. **The JSONL allowlist and the tool-call log.** A tripwire, not the enforcement. The allowlist voids the answer on any event or item it doesn't know, but it sees only what the JSONL reports: code-mode `exec`, `spawn_agent` and sandbox-denied shell calls report nothing there (fact 5). Since #74 the tool-call log covers those: any tool other than `exec_command`/`write_stdin`, or a shell call nothing accounts for, voids the answer.
 
 Residual risk:
 
 - **A newer CLI could offer a new tool.** It could come from a catalog field or feature we don't clear, or from one that emits no item, so layers 1 and 5 would both miss it. The mitigation is in code: `start()` refuses any CLI above `MAX_TESTED_CLI_VERSION` (0.159.1), so Sombra never runs an unverified tool set. Rerunning the capture test and raising the cap is the maintainer process for accepting a new version, not a user-side mitigation. If the cap is raised without that capture, or someone runs `codex` outside Sombra, only layer 2 (the permission profile) is designed to hold on an unverified version. Layers 3 and 4 were observed on 0.159.1 only.
 - **The accepted shell remains.** The agent can run read-only commands in the meeting folder and read the world-readable `:minimal` roots (`/etc`, `/usr`). That was already accepted in #18. On Linux it can also read the native Codex binary file itself (decision 8): an executable, no user data.
 - **A ChatGPT login isn't verified yet.** The remote catalog refresh might override `model_catalog_json`; the live check is in the table below.
+
+## The tool-call log (#74)
+
+**What the owner saw.** On macOS 27.0 with codex-cli 0.159.1, the capture test forced `exec_command` with `cat transcript.md; cat <sibling>/secret.txt; ls $HOME`. Seatbelt did its job: the model got the transcript back, and `Operation not permitted` for the other two. But `CodexRun.commands` and `.outputs` were empty, with nothing in `forbidden`: the JSONL had no `command_execution` item for a command that ran.
+
+**Why (codex-rs at `rust-v0.159.1`).** It is not a macOS event type. `codex exec --json` turns only `ItemStarted`/`ItemCompleted` notifications into items, and for a shell call those come from `ToolEmitter::unified_exec(…).emit(Begin)` in `core/src/unified_exec/process_manager.rs`. That runs only after the process was opened. Opening it (`UnifiedExecProcess::from_spawned` in `core/src/unified_exec/process.rs`) waits up to `EARLY_EXIT_GRACE_PERIOD` = 150 ms. If the process has exited by then, it calls `check_for_sandbox_denial`, which uses `is_likely_sandbox_denied` from `sandboxing/src/denial.rs`: under any sandbox, a non-zero exit whose output contains `operation not permitted`, `permission denied`, `read-only file system` and similar counts as denied. The error becomes `SandboxErr::Denied`. With `approval_policy = "never"` the orchestrator doesn't retry, and the output goes back to the model as the tool result, but neither a begin nor an end event is ever emitted. `launch.rs` emits them for `ToolError::Rejected` only (its comment: "sandbox denials remain retryable"). Also, `exec` can't backfill items from `thread/read`, because it skips that for an `--ephemeral` thread (`should_backfill_turn_completed_items` in `exec/src/lib.rs`).
+
+Seatbelt denies with `Operation not permitted`, so on macOS **every** fast command that touches a denied path takes this path. Bubblewrap doesn't mount those paths, so Linux says `No such file or directory` and usually has an item. The heuristic isn't platform-specific, though: on Linux, `echo 'cat: x: Operation not permitted' >&2; exit 1` (even `exit 2`) leaves no item either. That is how it was reproduced and recorded here without a Mac (`tests/brain/fixtures/codex/denied.*`, `test_denied_looking_command_is_still_seen`). A command that is still running at 150 ms gets its begin event and an item, even if it is denied later.
+
+**What sees it.** Codex's OpenTelemetry events are also written as `tracing` records with targets `codex_otel.trace_safe` and `codex_otel.log_only`. `codex exec` prints tracing to stderr through an `EnvFilter` read from `RUST_LOG` (default `error,opentelemetry_sdk=off,opentelemetry_otlp=off`). That filter applies to stderr only: exec sets no log file or log DB. Measured on 0.159.1, per run:
+
+- `codex_otel.trace_safe: event.name="codex.tool_call_received" … call_id="…" tool_name="…"`: one line for **every** tool call the model makes, before dispatch. That includes calls to tools that aren't offered (`exec`, `spawn_agent`) and calls that emit no item.
+- `codex_otel.trace_safe: event.name="codex.sandbox_outcome" tool_name=exec_command call_id=… outcome=denied`: logged exactly on the no-item path above.
+- `codex_otel.log_only: event.name="codex.tool_result" … call_id=… arguments={…} output=<the tool output the model got> mcp_server= …`: the command and its output.
+- `codex.user_prompt` shows the prompt as `[REDACTED]`.
+
+**Decision.**
+
+1. `CodexBrain` runs every `codex exec` with `RUST_LOG` = `TELEMETRY_LOG_FILTER` (Codex's default plus `codex_otel.trace_safe=info,codex_otel.log_only=info`). `RUST_LOG` is not on `PASSTHROUGH_ENV`, so the parent's value never replaces it.
+2. `parse_tool_log` reads those records and `reconcile_tool_calls` checks the run. Anything wrong goes to `CodexRun.forbidden`, which voids the answer with `BrainSandboxError`:
+   - a completed turn with no `trace_safe` record at all (the filter didn't take effect, so nothing is proven): `no codex tool-call log`;
+   - a call to any tool other than `exec_command` or `write_stdin`: `tool '<name>'`;
+   - a denied `exec_command` without its `codex.tool_result`: `… without a logged result`. Otherwise its command and output (Codex's `Chunk ID … Output:` header cut) are added to `commands`/`outputs`;
+   - fewer `command_execution` items than non-denied `exec_command` calls: `tool 'exec_command' without an item` (a hidden path we don't know);
+   - more items than calls: `item 'command_execution' without a logged call`.
+   `write_stdin` never creates an item, so it isn't counted.
+3. Error messages leave the telemetry out (`_stderr_detail`).
+
+**Why not refuse the backend on macOS.** The blind spot isn't macOS-only, and a platform refusal would leave Linux with the same gap. The log sees the calls on both, so the brain uses it on both. If it stops seeing them, the answer is void. It also closes the older gap in fact 5: forced `exec` and `spawn_agent` calls now void the answer instead of passing silently.
+
+**Limits.**
+
+- The log format isn't a public interface. It is pinned by `MAX_TESTED_CLI_VERSION`: raising it requires the capture test, which now checks the log too (`test_forced_removed_tool_call_is_not_run`, both shell tests).
+- A `codex.tool_result` holds text the command printed, which the agent controls. A line in it can look like a record. Such a line can add a call, cut a result short, or add a second result for a call; each fails closed (`test_forged_record_in_command_output_only_fails_closed`). A call with more than one result record gets none. The one thing it can do is plant a fake ` mcp_server=` in its own output, which cuts short the audit copy of that denied command's output.
+- Items and calls are matched by count, not id: the JSONL renumbers items (`item_N`).
+- An `exec_command` whose arguments aren't valid JSON, or that fails before the orchestrator, emits no item. It voids the answer. That is rare, and it fails closed.
+- Stderr now carries each tool output. It stays in memory, is not logged by Sombra, and `CodexRun` keeps only what it kept before.
 
 ## Left for a human
 
@@ -165,5 +204,6 @@ uv run pytest tests/brain/test_brain_codex_capture.py -v
 | Request offers only `exec_command` + `write_stdin` (`test_brain_codex_capture.py`, offline) | **passed** on 0.159.1, Linux x86-64 (default model, `gpt-5.5`, unknown slug; forced `exec` and `spawn_agent` refused) |
 | Shell `cat`s a file in the meeting folder; a file in the folder next to it and `~` are unreadable (`test_shell_reads_the_meeting_folder_and_nothing_else`, offline, #63) | **passed** on 0.159.1, Linux x86-64, npm under `/opt/node22`, temp and persistent `CODEX_HOME`. Without the fix the same test fails with `bwrap: execvp …/bin/codex` |
 | A release binary in a user folder (a `Downloads`-like temp folder, with `codex-resources`) exposes nothing next to it (`test_release_binary_in_a_user_folder_exposes_nothing_next_to_it`, offline, #68 review) | **passed** on 0.159.1, Linux x86-64. With the earlier folder grant the same test read the file next to the binary |
-| Same capture on macOS (incl. the #63 shell test with a Homebrew or npm prefix) | *pending human run* |
+| Same capture on macOS (incl. the #63 shell test with a Homebrew or npm prefix) | **ran** on 0.159.1, macOS 27.0 (M4 Pro), #74: 5 passed, 1 skipped (Linux only), 1 failed. The shell test failed because the JSONL had no item for the Seatbelt-denied command and the test expected bwrap's wording. Confinement held |
+| #74 capture with the tool-call log: `commands`/`outputs` show the forced command on macOS, and forced `exec`/`spawn_agent` void the answer | **passed** on 0.159.1, Linux x86-64, 8 tests (incl. `test_denied_looking_command_is_still_seen`, which takes the macOS no-item path). macOS: *pending human run* |
 | With a ChatGPT login, `codex debug models` + our catalog shows no tool fields, and a live answer asked to use `spawn_agent`/`exec` has no item off the allowlist (`test_live_catalog_and_run_offer_no_code_mode_or_subagents`) | *pending human run* |

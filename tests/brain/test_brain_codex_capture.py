@@ -11,13 +11,14 @@ network: the endpoint is ``127.0.0.1``. Run it by hand after a Codex upgrade::
 It runs past ``MAX_TESTED_CLI_VERSION``: passing on a newer CLI is what allows
 raising that cap (ADR 0018).
 
-The last two tests force a real ``exec_command`` and check that it can read the meeting
+The shell tests force a real ``exec_command`` and check that it can read the meeting
 folder and nothing next to it or next to the codex binary (#63: on Linux every command
-used to fail in bwrap).
+used to fail in bwrap), and that the brain sees every command it ran (#74: on macOS a
+Seatbelt denial left no item in the JSONL).
 
 A forced tool call also shows why the request is the control that matters: on
-0.159.1 a code-mode ``exec`` or a ``spawn_agent`` call leaves no item in the JSONL,
-so no output guard could have seen it.
+0.159.1 a code-mode ``exec`` or a ``spawn_agent`` call leaves no item in the JSONL.
+Only Codex's tool-call log sees it, and that voids the answer (#74).
 """
 
 from __future__ import annotations
@@ -25,6 +26,7 @@ from __future__ import annotations
 import json
 import shutil
 import subprocess
+import sys
 import threading
 from collections.abc import Iterator
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
@@ -38,6 +40,7 @@ import sombra.brain.codex as codex_module
 from sombra.brain.codex import (
     API_KEY_ENV,
     MIN_CLI_VERSION,
+    BrainSandboxError,
     CodexBrain,
     CodexSettings,
     parse_version,
@@ -252,8 +255,11 @@ async def test_forced_removed_tool_call_is_not_run(
     server.force.append(call)
     brain = brain_for(codex, server, tmp_path, monkeypatch)
     await brain.start(meeting)
-    await brain.answer(BrainRequest(trigger()))
+    with pytest.raises(BrainSandboxError, match=f"tool '{call['name']}'"):  # #74: seen in the log
+        await brain.answer(BrainRequest(trigger()))
     await brain.close()
+    assert brain.last_run is not None
+    assert brain.last_run.tool_calls == [call["name"]]
     assert len(server.bodies) == 2  # the model got the call's output, then answered
     outputs = " ".join(tool_outputs(server.bodies[1]))
     assert "code mode ran" not in outputs
@@ -271,6 +277,11 @@ def shell_call(cmd: str) -> dict[str, Any]:
     }
 
 
+# How each OS sandbox refuses a read outside the profile: bubblewrap doesn't mount the
+# path at all; Seatbelt sees it and denies the read.
+DENIED = "Operation not permitted" if sys.platform == "darwin" else "No such file or directory"
+
+
 async def test_shell_reads_the_meeting_folder_and_nothing_else(
     codex: str,
     server: FakeResponses,
@@ -278,20 +289,53 @@ async def test_shell_reads_the_meeting_folder_and_nothing_else(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """#63: on Linux every command failed with ``bwrap: execvp …/bin/codex``."""
+    """#63: on Linux every command failed with ``bwrap: execvp …/bin/codex``.
+
+    #74: on macOS the same run left ``commands`` and ``outputs`` empty.
+    """
     secret = tmp_path / "secret.txt"  # next to the meeting folder, like another meeting
     secret.write_text("SEGREDO-FORA-DA-REUNIAO\n", encoding="utf-8")
-    server.force.append(shell_call(f"cat transcript.md; cat {secret}; ls {Path.home()}"))
+    cmd = f"cat transcript.md; cat {secret}; ls {Path.home()}"
+    server.force.append(shell_call(cmd))
     brain = brain_for(codex, server, tmp_path, monkeypatch)
     await brain.start(meeting)
     await brain.answer(BrainRequest(trigger()))
     await brain.close()
     assert brain.last_run is not None
+    assert brain.last_run.tool_calls == ["exec_command"]
+    assert len(brain.last_run.commands) == 1  # the brain saw the command it ran
+    assert cmd in brain.last_run.commands[0]
     output = " ".join(brain.last_run.outputs)
+    got = " ".join(tool_outputs(server.bodies[1]))  # what the model was sent back
     assert "bwrap: execvp" not in output
     assert "o que você acha desse gráfico" in output  # the meeting folder is readable
-    assert "SEGREDO-FORA-DA-REUNIAO" not in output  # a sibling folder is not
-    assert "No such file or directory" in output
+    assert "SEGREDO-FORA-DA-REUNIAO" not in output + got  # a sibling folder is not
+    assert f"{secret}: {DENIED}" in output  # refused by the sandbox, not missing
+    assert DENIED in got
+
+
+async def test_denied_looking_command_is_still_seen(
+    codex: str,
+    server: FakeResponses,
+    meeting: Path,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """#74 on any OS: a command that exits at once with a denial message gets no JSONL
+    item on 0.159.1. That's what every Seatbelt denial looks like, so the brain takes
+    it from Codex's tool-call log instead."""
+    cmd = "cat transcript.md; echo 'cat: x: Operation not permitted' >&2; exit 1"
+    server.force.append(shell_call(cmd))
+    brain = brain_for(codex, server, tmp_path, monkeypatch)
+    await brain.start(meeting)
+    resp = await brain.answer(BrainRequest(trigger()))
+    await brain.close()
+    assert resp.text == "Fechamos na sexta."
+    assert brain.last_run is not None
+    assert brain.last_run.command_items == 0  # still no item: the log is what sees it
+    assert brain.last_run.commands == [cmd]
+    assert "o que você acha desse gráfico" in brain.last_run.outputs[0]
+    assert "Operation not permitted" in brain.last_run.outputs[0]
 
 
 @pytest.fixture
