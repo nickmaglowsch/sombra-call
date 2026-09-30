@@ -6,7 +6,8 @@ makes ``sombra doctor`` exit 1. Checks never talk to the OS directly: they read 
 the real one (pyobjc, ``keyring``, ``sounddevice`` imported lazily, never prompting).
 
 Sections: ``sombra`` (versions, models, disk, keychain), ``macos`` (which app holds the
-TCC grants, the permissions, input device, system-audio route) or ``linux`` (live capture
+TCC grants and whether the app's signature keeps them, the permissions, input device,
+system-audio route) or ``linux`` (live capture
 not built yet, ADR 0016), and ``agent`` (CLIs on PATH and API keys). The agent section
 is deliberately small and self-contained: the provider wizard (R4) replaces it with
 per-backend checks.
@@ -24,6 +25,7 @@ import os
 import platform
 import plistlib
 import shutil
+import subprocess
 import sys
 from collections.abc import Callable, Mapping
 from dataclasses import asdict, dataclass
@@ -116,6 +118,8 @@ class Probes:
     # Who macOS holds responsible for this process; None when it cannot be read.
     tcc_holder: TccHolder | None = None
     running_app: str = ""  # the Sombra.app this sombra runs from; "" for the uv install
+    # That app's signature: "certificate:<name>", "adhoc", "unsigned", or "" (unknown).
+    app_signature: str = ""
 
 
 # --- checks --------------------------------------------------------------------------
@@ -293,6 +297,43 @@ def check_permission_holder(p: Probes) -> list[Check]:
     ]
 
 
+def check_app_signature(p: Probes) -> list[Check]:
+    """Whether Sombra.app's signature lets macOS keep the grants across upgrades (ADR 0050)."""
+    if not p.running_app:
+        return []  # the uv install: the terminal's signature is what counts
+    name = "app signature"
+    kind, _, who = p.app_signature.partition(":")
+    if kind == "certificate":
+        return [
+            Check(
+                "macos",
+                name,
+                Status.OK,
+                f"signed with the certificate {who!r}: the grants survive upgrades",
+            )
+        ]
+    if kind == "adhoc":
+        return [
+            Check(
+                "macos",
+                name,
+                Status.WARN,
+                "ad-hoc signature (a development build or a labelled pre-release): macOS "
+                "forgets the permission grants on every upgrade",
+                "install a final release, signed with Sombra's certificate (install.sh)",
+            )
+        ]
+    return [
+        Check(
+            "macos",
+            name,
+            Status.WARN,
+            f"could not read the signature of {p.running_app}",
+            f"run `codesign -dv {p.running_app}`; reinstall Sombra.app if it fails",
+        )
+    ]
+
+
 def check_microphone(p: Probes) -> list[Check]:
     why = "needed for your voice (EU)"
     return [_permission_check("microphone", "Microphone", p.mic_permission(), p.host_app, why)]
@@ -353,6 +394,7 @@ def check_system_audio(p: Probes) -> list[Check]:
 MACOS_CHECKS: tuple[tuple[str, Callable[[Probes], list[Check]]], ...] = (
     ("macOS", check_macos_version),
     ("permissions holder", check_permission_holder),
+    ("app signature", check_app_signature),
     ("microphone", check_microphone),
     ("screen recording", check_screen_recording),
     ("accessibility", check_accessibility),
@@ -551,6 +593,22 @@ def holder_from_path(
     return TccHolder(str(name), str(info.get("CFBundleIdentifier", "")), bundle)
 
 
+def parse_signature(codesign_output: str) -> str:
+    """``codesign -dv`` output -> "certificate:<leaf name>", "adhoc", "unsigned" or ""."""
+    if "not signed at all" in codesign_output:
+        return "unsigned"
+    authority = ""
+    for line in codesign_output.splitlines():
+        key, sep, value = line.partition("=")
+        if not sep:
+            continue
+        if key == "Signature" and value.strip() == "adhoc":
+            return "adhoc"
+        if key == "Authority" and not authority:
+            authority = value.strip()
+    return f"certificate:{authority}" if authority else ""
+
+
 def running_app(frozen: bool, executable: str) -> str:
     """The Sombra.app this interpreter runs from (PyInstaller build), or ""."""
     if not frozen:
@@ -613,6 +671,20 @@ def _mac_tcc_holder() -> TccHolder | None:  # pragma: no cover - macOS only
     except Exception:  # a probe never crashes doctor; the check reports "could not read"
         return None
     return holder_from_path(path) if path else None
+
+
+def _mac_app_signature(app: str) -> str:  # pragma: no cover - macOS only
+    try:
+        proc = subprocess.run(  # noqa: S603  # fixed argv: the system codesign, our own path
+            ["/usr/bin/codesign", "-dv", "--verbose=2", app],
+            capture_output=True,
+            text=True,
+            check=False,
+            timeout=10,
+        )
+    except (OSError, subprocess.TimeoutExpired):
+        return ""
+    return parse_signature(proc.stdout + proc.stderr)
 
 
 def _mac_mic_permission() -> Permission:  # pragma: no cover - macOS only
@@ -712,10 +784,12 @@ def live_probes(
     extra: dict[str, Any] = {}
     app = running_app(bool(getattr(sys, "frozen", False)), sys.executable)
     holder = None
+    signature = ""
     if sys.platform == "darwin":
         release = platform.mac_ver()[0]
         os_name = "macOS"
         holder = _mac_tcc_holder()
+        signature = _mac_app_signature(app) if app else ""
         extra = {
             "mic_permission": _mac_mic_permission,
             "screen_permission": _mac_screen_permission,
@@ -742,6 +816,7 @@ def live_probes(
         host_app=holder.name if holder else host_app(os.environ),
         tcc_holder=holder,
         running_app=app,
+        app_signature=signature,
         sha256=file_sha256,
         disk_free=lambda path: shutil.disk_usage(path).free,
         which=shutil.which,

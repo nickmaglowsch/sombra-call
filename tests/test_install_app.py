@@ -1,8 +1,8 @@
 """``scripts/install.sh`` installing ``Sombra.app`` on macOS (ADR 0050), with fake tools.
 
-``uname``, ``sw_vers``, ``ditto``, ``plutil``, ``codesign`` and ``spctl`` are fakes on
-PATH, so the macOS flow runs on any CI runner. The real thing (a real zip, real
-codesign and Gatekeeper) runs in the release workflow's app smoke job.
+``uname``, ``sw_vers``, ``ditto``, ``plutil``, ``codesign``, ``xattr`` and ``uv`` are
+fakes on PATH, so the macOS flow runs on any CI runner. The real thing (a real zip, real
+codesign) runs in the release workflow's app-smoke job.
 """
 
 import hashlib
@@ -46,8 +46,21 @@ import plistlib, sys
 print(plistlib.load(open(sys.argv[1], "rb"))[sys.argv[2]])
 ' "$6" "$2"
 """,
-    "codesign": '#!/bin/sh\nexit "${FAKE_CODESIGN_RC:-0}"\n',
-    "spctl": "#!/bin/sh\nexit 3\n",  # not notarized, as on a PR build
+    # `codesign -dv` describes an ad-hoc signature unless FAKE_SIGNED=1.
+    "codesign": """#!/bin/sh
+if [ "$1" = "-dv" ]; then
+    if [ "${FAKE_SIGNED:-0}" = 1 ]; then echo "Authority=Sombra Code Signing" >&2
+    else echo "Signature=adhoc" >&2; fi
+    exit 0
+fi
+exit "${FAKE_CODESIGN_RC:-0}"
+""",
+    # xattr: logs removals; the zip is quarantined when FAKE_QUARANTINE=1.
+    "xattr": """#!/bin/sh
+echo "xattr $*" >> "$HOME/xattr.log"
+[ "$1" = "-p" ] && [ "${FAKE_QUARANTINE:-0}" != 1 ] && exit 1
+exit 0
+""",
     # uv: records what it is asked; `tool list` lists sombra when FAKE_UV_HAS_SOMBRA=1.
     "uv": """#!/bin/sh
 echo "uv $*" >> "$HOME/uv.log"
@@ -133,7 +146,10 @@ def test_installs_the_app_and_links_the_shim(mac: dict[str, Path]) -> None:
     assert link.is_symlink()
     assert link.resolve() == (app / sombra_app.SHIM_RELPATH).resolve()
     assert "sombra 0.2.0" in result.stdout  # ran through the link
-    assert "Gatekeeper does not accept this Sombra.app" in result.stderr
+    assert "ad-hoc signed" in result.stderr  # grants reset on upgrades: said up front
+    xattr_log = (mac["home"] / "xattr.log").read_text(encoding="utf-8")
+    assert f"xattr -dr com.apple.quarantine {app}" in xattr_log
+    assert "is quarantined" not in result.stdout
     assert "to Sombra (System Settings" in result.stdout  # the next steps name Sombra
     assert not (mac["home"] / "uv.log").exists() or "tool install" not in (
         mac["home"] / "uv.log"
@@ -242,3 +258,19 @@ def test_from_app_zip_is_macos_only(mac: dict[str, Path]) -> None:
     result = _install(mac, "--from-app-zip", str(zip_path), "--yes", "--no-models")
     assert result.returncode == 1
     assert "--from-app-zip is for macOS only" in result.stderr
+
+
+def test_signed_app_and_quarantined_zip(mac: dict[str, Path]) -> None:
+    zip_path = _make_zip(mac["tmp"] / "Sombra-0.2.0-macos-arm64.zip")
+    result = _install(
+        mac,
+        *("--from-app-zip", str(zip_path), "--yes", "--no-models"),
+        FAKE_SIGNED="1",
+        FAKE_QUARANTINE="1",
+    )
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert "ad-hoc" not in result.stderr
+    assert "is quarantined (downloaded by a browser)" in result.stdout
+    app = mac["apps"] / "Sombra.app"
+    xattr_log = (mac["home"] / "xattr.log").read_text(encoding="utf-8")
+    assert f"xattr -dr com.apple.quarantine {app}" in xattr_log

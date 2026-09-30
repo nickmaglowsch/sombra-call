@@ -1,14 +1,14 @@
 # Tag-driven releases (issue #44, ADR 0044; Sombra.app: issue #50, ADR 0050). See docs/release.md.
 #
 # - push of a tag vX.Y.Z[-rcN|-betaN|-alphaN]: build → smoke install → publish a GitHub Release.
-#   Sombra.app is built, Developer ID signed, notarized and stapled (app), then installed and
-#   verified on a clean Mac (app-smoke). publish runs the macOS release gate: a final tag is
-#   refused unless the app is signed, notarized and stapled.
+#   Sombra.app is built and signed with the project's self-signed certificate (app), then
+#   installed and verified on a clean Mac (app-smoke). publish runs the macOS release gate:
+#   a final tag is refused unless the app is signed by the pinned certificate.
 # - pull_request touching the release files: the same jobs, no publish, so the PR proves the
-#   pipeline. Without the Apple secrets (always on PRs) the app is ad-hoc signed and only
-#   uploaded as a workflow artifact.
-# - workflow_dispatch: the same as a PR, but signs and notarizes when the secrets exist, to
-#   test the Apple setup without pushing a tag.
+#   pipeline. Without the signing secrets (always on PRs) the app is ad-hoc signed; a twin
+#   signed with a throwaway certificate made in the job proves the self-signed path.
+# - workflow_dispatch: the same as a PR, but signs with the project's certificate when the
+#   secrets exist, to test the setup without pushing a tag.
 #
 # Not a required check: the ruleset only requires the jobs in ci.yml.
 name: Release
@@ -176,11 +176,11 @@ jobs:
     name: app (macos-14)
     needs: build
     runs-on: macos-14
-    timeout-minutes: 120 # notarization waits in Apple's queue
+    timeout-minutes: 45
     env:
-      # Developer ID + notarization for tags and manual runs, and only when the secrets
-      # exist. PRs and forks never get them: ad-hoc signature, artifact only (ADR 0050).
-      SIGN: ${{ (github.ref_type == 'tag' || github.event_name == 'workflow_dispatch') && secrets.MACOS_CERT_P12_BASE64 != '' && secrets.APPLE_NOTARY_KEY_P8_BASE64 != '' }}
+      # The project's self-signed certificate signs tags and manual runs when the secrets
+      # exist; PRs and forks never get them and sign ad-hoc (ADR 0050).
+      SIGN: ${{ (github.ref_type == 'tag' || github.event_name == 'workflow_dispatch') && secrets.MACOS_SELFSIGN_P12_BASE64 != '' }}
       EXPECTED_VERSION: ${{ needs.build.outputs.version }}
     steps:
       # packaging/macos and uv.lock (the pinned dependencies); the app is built from the wheel.
@@ -196,6 +196,9 @@ jobs:
           wheel=$(ls dist/sombra-*.whl)
           uv run --no-project --python 3.12 packaging/macos/build.py --wheel "$wheel" \
             --out "$RUNNER_TEMP/app" --github-output "$GITHUB_OUTPUT"
+          # An unsigned twin for the throwaway-certificate test below.
+          mkdir -p "$RUNNER_TEMP/test"
+          ditto "$RUNNER_TEMP/app/dist/Sombra.app" "$RUNNER_TEMP/test/Sombra.app"
       - name: Info.plist carries the release version and both localisations
         env:
           APP: ${{ steps.build.outputs.app }}
@@ -204,78 +207,45 @@ jobs:
           echo "CFBundleShortVersionString=$got"
           test "$got" = "$EXPECTED_VERSION"
           plutil -lint "$APP/Contents/Info.plist" "$APP"/Contents/Resources/*.lproj/InfoPlist.strings
-      - name: Import the Developer ID certificate
-        id: cert
+
+      # --- the release app: the project's certificate, or ad-hoc ------------------------
+      - name: Import the project's signing identity
+        id: identity
         if: env.SIGN == 'true'
         env:
-          MACOS_CERT_P12_BASE64: ${{ secrets.MACOS_CERT_P12_BASE64 }}
-          MACOS_CERT_PASSWORD: ${{ secrets.MACOS_CERT_PASSWORD }}
-          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+          P12_BASE64: ${{ secrets.MACOS_SELFSIGN_P12_BASE64 }}
+          P12_PASSWORD: ${{ secrets.MACOS_SELFSIGN_P12_PASSWORD }}
         run: |
-          keychain="$RUNNER_TEMP/signing.keychain-db"
-          echo "keychain=$keychain" >> "$GITHUB_OUTPUT"
-          kc_pass=$(openssl rand -hex 24)
-          echo "::add-mask::$kc_pass"
-          printf '%s' "$MACOS_CERT_P12_BASE64" | base64 --decode > "$RUNNER_TEMP/cert.p12"
-          security create-keychain -p "$kc_pass" "$keychain"
-          security set-keychain-settings -lut 21600 "$keychain"
-          security unlock-keychain -p "$kc_pass" "$keychain"
-          security import "$RUNNER_TEMP/cert.p12" -k "$keychain" -P "$MACOS_CERT_PASSWORD" \
-            -T /usr/bin/codesign
-          rm -f "$RUNNER_TEMP/cert.p12"
-          security set-key-partition-list -S apple-tool:,apple:,codesign: -s -k "$kc_pass" \
-            "$keychain" > /dev/null
-          # shellcheck disable=SC2046 # one word per existing keychain path
-          security list-keychains -d user -s "$keychain" $(security list-keychains -d user | tr -d '"')
-          identity=$(security find-identity -v -p codesigning "$keychain" \
-            | grep "Developer ID Application" | grep "($APPLE_TEAM_ID)" | head -n 1 | awk '{print $2}')
-          if [ -z "$identity" ]; then
-            echo "::error::MACOS_CERT_P12_BASE64 holds no Developer ID Application identity for team APPLE_TEAM_ID"
+          p12="$RUNNER_TEMP/identity.p12"
+          printf '%s' "$P12_BASE64" | base64 --decode > "$p12"
+          sh scripts/release/import-signing-identity.sh "$p12" "$P12_PASSWORD" \
+            "$RUNNER_TEMP/release.keychain-db" --github-output "$GITHUB_OUTPUT"
+          rm -f "$p12"
+      - name: The identity is the pinned certificate
+        if: env.SIGN == 'true'
+        env:
+          SHA256: ${{ steps.identity.outputs.sha256 }}
+        run: |
+          pinned=$(uv run --no-project --python 3.12 python -c \
+            'import sys; sys.path.insert(0, "scripts/release"); import app_gate; print(app_gate.read_pinned())')
+          if [ -z "$pinned" ]; then
+            echo "::warning::packaging/macos/signing-cert.sha256 pins no certificate yet: the release gate will refuse final tags."
+          elif [ "$pinned" != "$SHA256" ]; then
+            echo "::error::MACOS_SELFSIGN_P12_BASE64 holds certificate $SHA256, but $pinned is pinned."
             exit 1
           fi
-          echo "identity=$identity" >> "$GITHUB_OUTPUT"
       - name: Sign every Mach-O inside-out (hardened runtime)
         env:
           APP: ${{ steps.build.outputs.app }}
-          IDENTITY: ${{ steps.cert.outputs.identity }}
+          IDENTITY: ${{ steps.identity.outputs.sha1 }}
         run: |
           if [ "$SIGN" = true ]; then
-            uv run --no-project --python 3.12 packaging/macos/sign.py "$APP" \
-              --identity "$IDENTITY" --timestamp
+            uv run --no-project --python 3.12 packaging/macos/sign.py "$APP" --identity "$IDENTITY"
           else
-            echo "::notice::No Apple signing secrets on this run: Sombra.app is ad-hoc signed, a workflow artifact only, never a release asset (ADR 0050)."
+            echo "::notice::No signing secrets on this run: Sombra.app is ad-hoc signed, so its TCC grants would reset on every upgrade (ADR 0050)."
             uv run --no-project --python 3.12 packaging/macos/sign.py "$APP" --identity -
           fi
-      - name: Notarize (notarytool) and staple
-        if: env.SIGN == 'true'
-        env:
-          APP: ${{ steps.build.outputs.app }}
-          APPLE_NOTARY_KEY_ID: ${{ secrets.APPLE_NOTARY_KEY_ID }}
-          APPLE_NOTARY_ISSUER_ID: ${{ secrets.APPLE_NOTARY_ISSUER_ID }}
-          APPLE_NOTARY_KEY_P8_BASE64: ${{ secrets.APPLE_NOTARY_KEY_P8_BASE64 }}
-        run: |
-          key="$RUNNER_TEMP/notary.p8"
-          trap 'rm -f "$key"' EXIT
-          printf '%s' "$APPLE_NOTARY_KEY_P8_BASE64" | base64 --decode > "$key"
-          auth="--key $key --key-id $APPLE_NOTARY_KEY_ID --issuer $APPLE_NOTARY_ISSUER_ID"
-          ditto -c -k --sequesterRsrc --keepParent "$APP" "$RUNNER_TEMP/notarize.zip"
-          # shellcheck disable=SC2086 # $auth is a word list on purpose
-          out=$(xcrun notarytool submit "$RUNNER_TEMP/notarize.zip" $auth \
-            --wait --timeout 90m --output-format json) || true
-          echo "$out"
-          id=$(printf '%s' "$out" | python3 -c 'import json,sys; print(json.load(sys.stdin).get("id", ""))' || true)
-          status=$(printf '%s' "$out" | python3 -c 'import json,sys; print(json.load(sys.stdin).get("status", ""))' || true)
-          if [ -n "$id" ]; then
-            # shellcheck disable=SC2086
-            xcrun notarytool log "$id" $auth || true
-          fi
-          if [ "$status" != Accepted ]; then
-            echo "::error::notarization status: ${status:-no answer}; see the log above"
-            exit 1
-          fi
-          xcrun stapler staple "$APP"
-          xcrun stapler validate "$APP"
-          spctl --assess --type execute -vv "$APP"
+          codesign -d -r- "$APP"
       - name: Zip with ditto and report the size
         env:
           APP: ${{ steps.build.outputs.app }}
@@ -286,7 +256,7 @@ jobs:
           app_mb=$(du -sm "$APP" | cut -f 1)
           zip_mb=$(( $(stat -f %z "$zip") / 1048576 ))
           files=$(find "$APP" -type f | wc -l | tr -d ' ')
-          signature=$([ "$SIGN" = true ] && echo "Developer ID, notarized, stapled" || echo "ad-hoc (no Apple secrets)")
+          signature=$([ "$SIGN" = true ] && echo "the project's self-signed certificate" || echo "ad-hoc (no signing secrets)")
           {
             echo "### Sombra.app $EXPECTED_VERSION"
             echo ""
@@ -302,19 +272,93 @@ jobs:
           path: app-dist/
           if-no-files-found: error
           retention-days: 14
-      - name: Remove the signing keychain
-        if: always() && steps.cert.outputs.keychain != ''
+
+      # --- self-signing, proven with a throwaway certificate made in this job -----------
+      - name: Make and import a throwaway self-signed identity
+        id: throwaway
+        run: |
+          sh scripts/release/make-signing-identity.sh --out "$RUNNER_TEMP/throwaway" \
+            --name "Sombra CI Throwaway" --days 2 --github-output "$RUNNER_TEMP/made.txt"
+          p12=$(sed -n 's/^p12=//p' "$RUNNER_TEMP/made.txt")
+          password=$(sed -n 's/^password=//p' "$RUNNER_TEMP/made.txt")
+          echo "::add-mask::$password"
+          sh scripts/release/import-signing-identity.sh "$p12" "$password" \
+            "$RUNNER_TEMP/throwaway.keychain-db" --github-output "$GITHUB_OUTPUT"
+      - name: Sign the twin with it; the designated requirement pins the certificate
         env:
-          KEYCHAIN: ${{ steps.cert.outputs.keychain }}
-        run: security delete-keychain "$KEYCHAIN" || true
+          APP: ${{ runner.temp }}/test/Sombra.app
+          SHA1: ${{ steps.throwaway.outputs.sha1 }}
+        run: |
+          uv run --no-project --python 3.12 packaging/macos/sign.py "$APP" --identity "$SHA1"
+          codesign -dv --verbose=4 "$APP" 2>&1 | grep -E '^(Identifier|Authority|TeamIdentifier|CodeDirectory)'
+          dr=$(codesign -d -r- "$APP" 2>/dev/null | sed -n 's/^designated => //p')
+          echo "designated => $dr"
+          echo "$dr" | grep -q 'identifier "io.github.nickmaglowsch.Sombra"'
+          echo "$dr" | grep -qiE "certificate (leaf|root) = H\"$SHA1\""
+          if echo "$dr" | grep -q cdhash; then echo "::error::the requirement pins the cdhash"; exit 1; fi
+          echo "DR_SELF=$dr" >> "$GITHUB_ENV"
+      - name: A rebuilt app still satisfies the old requirement; an ad-hoc one does not
+        env:
+          SIGNED: ${{ runner.temp }}/test/Sombra.app
+          ADHOC: ${{ steps.build.outputs.app }}
+          SHA1: ${{ steps.throwaway.outputs.sha1 }}
+        run: |
+          # "Upgrade": change the app (a new build number), re-sign with the same identity.
+          # TCC re-checks the requirement it stored at grant time against the new app.
+          next="$RUNNER_TEMP/next"
+          mkdir -p "$next/self" "$next/adhoc"
+          ditto "$SIGNED" "$next/self/Sombra.app"
+          plutil -replace CFBundleVersion -string "next" "$next/self/Sombra.app/Contents/Info.plist"
+          uv run --no-project --python 3.12 packaging/macos/sign.py "$next/self/Sombra.app" --identity "$SHA1"
+          codesign --verify -R="=$DR_SELF" "$next/self/Sombra.app"
+          echo "self-signed: the next build satisfies the stored requirement -> grants persist"
+          if [ "$SIGN" != true ]; then
+            dr_adhoc=$(codesign -d -r- "$ADHOC" 2>/dev/null | sed -n 's/^designated => //p')
+            echo "ad-hoc requirement: $dr_adhoc"
+            ditto "$ADHOC" "$next/adhoc/Sombra.app"
+            plutil -replace CFBundleVersion -string "next" "$next/adhoc/Sombra.app/Contents/Info.plist"
+            uv run --no-project --python 3.12 packaging/macos/sign.py "$next/adhoc/Sombra.app" --identity -
+            if codesign --verify -R="=$dr_adhoc" "$next/adhoc/Sombra.app"; then
+              echo "::error::an ad-hoc rebuild satisfied the old cdhash requirement"; exit 1
+            fi
+            echo "ad-hoc: the next build fails the stored requirement -> grants reset"
+          fi
+      - name: Zip the throwaway-signed app for app-smoke
+        env:
+          APP: ${{ runner.temp }}/test/Sombra.app
+          SHA256: ${{ steps.throwaway.outputs.sha256 }}
+        run: |
+          mkdir -p app-test
+          ditto -c -k --sequesterRsrc --keepParent "$APP" "app-test/Sombra-$EXPECTED_VERSION-macos-arm64.zip"
+          echo "$SHA256" > app-test/pinned.sha256
+      - uses: actions/upload-artifact@v4
+        with:
+          name: macos-app-selfsigned-test
+          path: app-test/
+          if-no-files-found: error
+          retention-days: 7
+      - name: Remove the keychains
+        if: always()
+        run: |
+          for kc in "$RUNNER_TEMP/release.keychain-db" "$RUNNER_TEMP/throwaway.keychain-db"; do
+            if [ -f "$kc" ]; then security delete-keychain "$kc" || true; fi
+          done
+          rm -rf "$RUNNER_TEMP/throwaway"
 
   app-smoke:
-    name: app-smoke (macos-14)
+    name: app-smoke (${{ matrix.variant }})
     needs: [build, app]
     runs-on: macos-14
     timeout-minutes: 30
+    strategy:
+      fail-fast: false
+      matrix:
+        # release: the app a tag would publish (ad-hoc on PRs).
+        # selfsigned-test: the same build signed with the job's throwaway certificate.
+        variant: [release, selfsigned-test]
     env:
       EXPECTED_VERSION: ${{ needs.build.outputs.version }}
+      ARTIFACT: ${{ matrix.variant == 'release' && 'macos-app' || 'macos-app-selfsigned-test' }}
     steps:
       # A clean Mac: install the zip the way users get it (install.sh), then check it.
       - uses: actions/download-artifact@v4
@@ -323,7 +367,7 @@ jobs:
           path: dist
       - uses: actions/download-artifact@v4
         with:
-          name: macos-app
+          name: ${{ env.ARTIFACT }}
           path: macos-app
       # The gate script, the bundle definition and the e2e fixture only; never the source.
       - uses: actions/checkout@v4
@@ -337,13 +381,18 @@ jobs:
       - uses: astral-sh/setup-uv@v6
         with:
           enable-cache: false
-      - name: Install with install.sh (Sombra.app + CLI shim)
+      - name: Install with install.sh (Sombra.app + CLI shim, quarantine removed)
         run: |
           zip=$(ls macos-app/Sombra-*-macos-arm64.zip)
+          # Simulate a browser download: install.sh must strip the quarantine it inherits.
+          xattr -w com.apple.quarantine "0083;$(printf '%x' "$(date +%s)");Safari;" "$zip"
           sh dist/install.sh --from-app-zip "$zip" --yes --no-models
           echo "$HOME/.local/bin" >> "$GITHUB_PATH"
           app=/Applications/Sombra.app
           test -d "$app" || app="$HOME/Applications/Sombra.app"
+          if xattr -r -p com.apple.quarantine "$app" 2>/dev/null | grep -q .; then
+            echo "::error::$app still carries com.apple.quarantine"; exit 1
+          fi
           echo "APP=$app" >> "$GITHUB_ENV"
           echo "ZIP=$zip" >> "$GITHUB_ENV"
       - name: codesign --verify --deep --strict
@@ -351,9 +400,10 @@ jobs:
           ls -l "$HOME/.local/bin/sombra"
           codesign --verify --deep --strict --verbose=2 "$APP"
           codesign -dv --verbose=4 "$APP"
+          codesign -d -r- "$APP"
           codesign -dv --verbose=4 "$APP/Contents/Helpers/sombra"
           codesign -d --entitlements - "$APP"
-      - name: Record the release-gate evidence (codesign, spctl, stapler)
+      - name: Record the release-gate evidence
         run: |
           uv run --no-project --python 3.12 repo/scripts/release/app_gate.py record \
             --app "$APP" --zip "$ZIP" --output app-status.json
@@ -364,6 +414,8 @@ jobs:
           test "$got" = "sombra $EXPECTED_VERSION"
           test "$(plutil -extract CFBundleShortVersionString raw -o - "$APP/Contents/Info.plist")" = "$EXPECTED_VERSION"
       - name: sombra doctor --json (Sombra holds the TCC grants)
+        env:
+          VARIANT: ${{ matrix.variant }}
         run: |
           set -u
           # Exit 1 is expected: --no-models leaves the models missing (a FAIL).
@@ -371,7 +423,7 @@ jobs:
           cat doctor.json
           test "$code" -le 1
           python3 - <<'EOF'
-          import json
+          import json, os
           data = json.load(open("doctor.json"))
           names = {c["name"]: c for c in data["checks"]}
           assert names["sombra"]["status"] == "ok", names["sombra"]
@@ -380,6 +432,11 @@ jobs:
           # The shim disclaimed responsibility: macOS attributes this process to Sombra.app.
           assert holder["status"] == "ok", holder
           assert holder["detail"].startswith("Sombra (io.github.nickmaglowsch.Sombra) at "), holder
+          signature = names["app signature"]
+          print(signature)
+          if os.environ["VARIANT"] == "selfsigned-test":
+              assert signature["status"] == "ok", signature
+              assert "'Sombra CI Throwaway'" in signature["detail"], signature
           fails = [c for c in data["checks"] if c["status"] == "fail"]
           unexpected = [c for c in fails if not c["name"].startswith("model ")]
           assert not unexpected, unexpected
@@ -416,16 +473,26 @@ jobs:
           types = [json.loads(line)['type'] for line in log]
           print(types)
           assert types == ['trigger', 'suggestion', 'action'], types" "$dir"
-      - name: The release gate would refuse this build for a final tag (unless notarized)
+      - name: The release gate on this build
+        env:
+          VARIANT: ${{ matrix.variant }}
         run: |
           python3 -c 'import json; print(json.dumps(json.load(open("app-status.json")), indent=2))'
-          if uv run --no-project --python 3.12 repo/scripts/release/app_gate.py ready \
-            --status app-status.json; then
-            echo "Developer ID signed, notarized and stapled: a final tag may publish it."
+          gate="uv run --no-project --python 3.12 repo/scripts/release/app_gate.py"
+          if [ "$VARIANT" = selfsigned-test ]; then
+            # Pinned to the throwaway certificate, the gate accepts it ...
+            $gate ready --status app-status.json --pinned-sha256 "$(cat macos-app/pinned.sha256)"
+            # ... and pinned to any other certificate, it refuses it.
+            if $gate ready --status app-status.json --pinned-sha256 "$(printf '%064d' 1)"; then
+              echo "::error::the gate accepted a certificate that is not the pinned one"; exit 1
+            fi
+          elif $gate ready --status app-status.json; then
+            echo "Signed by the pinned certificate: a final tag may publish it."
           else
-            echo "::notice::Not release-ready (expected without the Apple secrets): a final tag would refuse to publish; a pre-release would publish without the app."
+            echo "::notice::Not release-ready (expected without the signing secrets): a final tag would refuse to publish; a pre-release would publish it labelled ad-hoc."
           fi
       - uses: actions/upload-artifact@v4
+        if: matrix.variant == 'release'
         with:
           name: macos-app-status
           path: app-status.json
@@ -456,18 +523,16 @@ jobs:
         with:
           name: macos-app-status
           path: macos-app-status
-      # ADR 0050: a final tag publishes only with a Developer ID signed, notarized and stapled
-      # Sombra.app (spctl --assess passed in app-smoke); a pre-release without one publishes
-      # without the app. Refusing fails this job, so nothing is published.
+      # ADR 0050: a final tag publishes only a Sombra.app signed by the pinned self-signed
+      # certificate (packaging/macos/signing-cert.sha256); a pre-release may publish an
+      # ad-hoc one, labelled in the notes. Refusing fails this job: nothing is published.
       - name: macOS release gate
         id: gate
-        env:
-          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
         run: |
           zip=$(ls macos-app/Sombra-*-macos-arm64.zip)
           uv run --no-project --python 3.12 scripts/release/app_gate.py decide \
             --status macos-app-status/app-status.json --tag "$GITHUB_REF_NAME" --zip "$zip" \
-            --team-id "$APPLE_TEAM_ID" --github-output "$GITHUB_OUTPUT"
+            --github-output "$GITHUB_OUTPUT"
       - name: Add Sombra.app to the assets and rewrite SHA256SUMS
         if: steps.gate.outputs.attach == 'true'
         run: |
@@ -478,9 +543,19 @@ jobs:
           uv run --no-project --python 3.12 scripts/release/checksums.py verify dist
           (cd dist && sha256sum -c SHA256SUMS)
       - name: Release notes from merged PR titles
+        env:
+          APP_SIGNATURE: ${{ steps.gate.outputs.app_signature }}
         run: |
           uv run --no-project --python 3.12 scripts/release/notes.py "$GITHUB_REF_NAME" \
             --repo "$GITHUB_REPOSITORY" --output "$RUNNER_TEMP/notes.md"
+          if [ "$APP_SIGNATURE" = adhoc ]; then
+            {
+              echo ""
+              echo "> **macOS:** \`Sombra-*-macos-arm64.zip\` in this pre-release is **ad-hoc signed**,"
+              echo "> not signed with Sombra's certificate. It runs, but macOS asks for the"
+              echo "> permissions again after every upgrade (ADR 0050)."
+            } >> "$RUNNER_TEMP/notes.md"
+          fi
           cat "$RUNNER_TEMP/notes.md"
       - name: Create the GitHub Release
         env:

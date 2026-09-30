@@ -1,6 +1,10 @@
 """The macOS release gate: is this ``Sombra.app`` fit to publish for this tag? (ADR 0050)
 
-Two steps, so the evidence is gathered on a Mac and the decision is unit-tested::
+Sombra.app is signed with the project's own **self-signed** certificate (no paid Apple
+Developer ID, no notarization). What makes TCC grants survive upgrades is that every
+release is signed by the *same* certificate, so its SHA-256 is pinned in the repo
+(``packaging/macos/signing-cert.sha256``) and checked here. Two steps, so the evidence
+is gathered on a Mac and the decision is unit-tested::
 
     # on macOS, against the app unpacked from the zip that would be published
     python scripts/release/app_gate.py record --app Sombra.app \\
@@ -8,22 +12,23 @@ Two steps, so the evidence is gathered on a Mac and the decision is unit-tested:
 
     # anywhere: decide, for a tag, from that record
     python scripts/release/app_gate.py decide --status app-status.json --tag v0.2.0 \\
-        --zip Sombra-0.2.0-macos-arm64.zip [--team-id ABCDE12345] [--github-output FILE]
+        --zip Sombra-0.2.0-macos-arm64.zip [--pinned-sha256 HEX] [--github-output FILE]
 
-``record`` runs ``codesign -dv``, ``codesign --verify --deep --strict``,
-``spctl --assess --type execute`` and ``stapler validate`` and writes what they said.
-``decide`` then:
+``record`` runs ``codesign -dv``, ``codesign -d -r-`` (the designated requirement),
+``codesign -d --extract-certificates`` (the leaf certificate's SHA-256) and
+``codesign --verify --deep --strict``, and writes what they said. ``decide`` then:
 
-- **refuses** (exit 1) a final tag unless the app is Developer ID signed with the
-  hardened runtime, passes the strict verification, is notarized (Gatekeeper accepts it
-  as "Notarized Developer ID") and has its ticket stapled;
-- lets a pre-release publish **without** the app when it is not (``attach=false``): an
-  unsigned app is never a release asset;
+- **refuses** (exit 1) a final tag unless the app is signed by the pinned certificate,
+  with the hardened runtime, a designated requirement that pins that certificate (not
+  the cdhash), and a clean strict verification;
+- lets a pre-release publish an **ad-hoc** app, labelled as such (``app_signature=adhoc``:
+  its grants reset on every upgrade); a pre-release signed by any other certificate is
+  refused, since that means the signing secrets are wrong;
 - always refuses a zip whose name, SHA-256, version or bundle id don't match.
 
-It prints ``attach=true|false`` (also to ``--github-output``). ``ready --status FILE``
-exits 1 and says why when the recorded app could not ship in a final release: PR runs
-use it to show the gate refuses their ad-hoc build. Standard library only.
+It prints ``attach=true|false`` and ``app_signature=pinned|adhoc`` (also to
+``--github-output``). ``ready --status FILE`` exits 1, saying why, when the recorded app
+could not ship in a final release. Standard library only.
 """
 
 from __future__ import annotations
@@ -35,25 +40,31 @@ import plistlib
 import re
 import subprocess
 import sys
+import tempfile
 from collections.abc import Callable, Sequence
 from dataclasses import asdict, dataclass, field
 from pathlib import Path
 
-sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "packaging" / "macos"))
+ROOT = Path(__file__).resolve().parents[2]
+sys.path.insert(0, str(ROOT / "packaging" / "macos"))
 
-import sombra_app  # packaging/macos: bundle id and asset name
-from tags import TagError, parse_tag  # scripts/release, next to this file
+import sombra_app  # noqa: E402  # packaging/macos: bundle id and asset name
+from tags import TagError, parse_tag  # noqa: E402  # scripts/release, next to this file
 
-DEVELOPER_ID = "developer-id"
+PINNED_FILE = ROOT / "packaging" / "macos" / "signing-cert.sha256"
+
+CERTIFICATE = "certificate"  # signed with a certificate (ours or anyone's)
 ADHOC = "adhoc"
-OTHER = "other"
 UNSIGNED = "unsigned"
+
+_RUNTIME_FLAG = re.compile(r"\bflags=0x[0-9a-f]+\([^)]*\bruntime\b[^)]*\)")
+_HEX64 = re.compile(r"^[0-9a-f]{64}$")
 
 
 @dataclass(frozen=True)
 class Signature:
-    kind: str  # DEVELOPER_ID, ADHOC, OTHER or UNSIGNED
-    team_id: str = ""
+    kind: str  # CERTIFICATE, ADHOC or UNSIGNED
+    authority: str = ""  # the leaf certificate's common name
     identifier: str = ""
     hardened_runtime: bool = False
 
@@ -67,29 +78,23 @@ class AppStatus:
     bundle_id: str
     version: str
     signature: str
-    team_id: str
+    authority: str
     identifier: str
+    cert_sha256: str
+    designated_requirement: str
     hardened_runtime: bool
     codesign_strict: bool
-    spctl: bool
-    spctl_source: str
-    stapled: bool
-
-    @property
-    def notarized(self) -> bool:
-        return self.spctl and "notarized" in self.spctl_source.lower()
 
 
 @dataclass
 class Decision:
     attach: bool
     refuse: bool
+    app_signature: str = ""  # "pinned" or "adhoc" when attached
     reasons: list[str] = field(default_factory=list)
 
 
 # --- parsing tool output -----------------------------------------------------------------
-
-_RUNTIME_FLAG = re.compile(r"\bflags=0x[0-9a-f]+\([^)]*\bruntime\b[^)]*\)")
 
 
 def parse_codesign_display(text: str) -> Signature:
@@ -101,27 +106,54 @@ def parse_codesign_display(text: str) -> Signature:
         key, sep, value = line.partition("=")
         if sep:
             fields.setdefault(key.strip(), []).append(value.strip())
-    team = fields.get("TeamIdentifier", [""])[0]
-    if team == "not set":
-        team = ""
     identifier = fields.get("Identifier", [""])[0]
     # "CodeDirectory v=20500 size=... flags=0x10002(adhoc,runtime) hashes=..."
     runtime = bool(_RUNTIME_FLAG.search(text))
-    if "adhoc" in fields.get("Signature", []):
-        kind = ADHOC
-    elif any(a.startswith("Developer ID Application:") for a in fields.get("Authority", [])):
-        kind = DEVELOPER_ID
-    else:
-        kind = OTHER
-    return Signature(kind, team, identifier, runtime)
+    authorities = fields.get("Authority", [])
+    if "adhoc" in fields.get("Signature", []) or not authorities:
+        return Signature(ADHOC, "", identifier, runtime)
+    return Signature(CERTIFICATE, authorities[0], identifier, runtime)
 
 
-def parse_spctl_source(text: str) -> str:
-    """``spctl --assess -vv`` output -> its ``source=`` value ("Notarized Developer ID")."""
+def parse_requirement(text: str) -> str:
+    """``codesign -d -r-`` output -> the designated requirement expression."""
     for line in text.splitlines():
-        key, sep, value = line.partition("=")
-        if sep and key.strip() == "source":
+        key, sep, value = line.partition("=>")
+        if sep and key.strip() == "designated":
             return value.strip()
+    return ""
+
+
+def pins_certificate(requirement: str, identifier: str) -> bool:
+    """True when the designated requirement names the identifier and a certificate hash.
+
+    A self-signed identity gets ``identifier "X" and certificate leaf = H"<sha1>"``; an
+    ad-hoc signature gets ``cdhash H"..."``, which changes with every build.
+    """
+    return (
+        f'identifier "{identifier}"' in requirement
+        and re.search(r'certificate (?:leaf|root) = H"[0-9a-fA-F]{40}"', requirement) is not None
+        and "cdhash" not in requirement
+    )
+
+
+def normalize_fingerprint(text: str) -> str:
+    return text.strip().replace(":", "").lower()
+
+
+def read_pinned(path: Path | None = None) -> str:
+    """The pinned certificate SHA-256 (first non-comment line), or "" if none is set."""
+    path = PINNED_FILE if path is None else path
+    try:
+        lines = path.read_text(encoding="utf-8").splitlines()
+    except FileNotFoundError:
+        return ""
+    for line in lines:
+        value = normalize_fingerprint(line.split("#", 1)[0])
+        if value:
+            if not _HEX64.match(value):
+                raise ValueError(f"{path}: not a SHA-256 fingerprint: {line.strip()!r}")
+            return value
     return ""
 
 
@@ -143,27 +175,40 @@ def _tool(cmd: Sequence[str]) -> tuple[int, str]:  # pragma: no cover - macOS to
     return proc.returncode, proc.stdout + proc.stderr
 
 
-def record(app: Path, zip_path: Path, tool: Tool = _tool) -> AppStatus:
+def leaf_certificate_sha256(app: Path, tool: Tool = _tool) -> str:
+    """SHA-256 of the signing (leaf) certificate, or "" for ad-hoc/unsigned code."""
+    with tempfile.TemporaryDirectory() as tmp:
+        prefix = Path(tmp) / "cert"
+        tool(["codesign", "-d", f"--extract-certificates={prefix}", str(app)])
+        leaf = Path(f"{prefix}0")
+        return sha256_file(leaf) if leaf.is_file() else ""
+
+
+def record(
+    app: Path,
+    zip_path: Path,
+    tool: Tool = _tool,
+    cert_sha256: Callable[[Path], str] | None = None,
+) -> AppStatus:
     with (app / "Contents" / "Info.plist").open("rb") as f:
         info = plistlib.load(f)
     _, display = tool(["codesign", "-dv", "--verbose=4", str(app)])
     sig = parse_codesign_display(display)
+    _, req = tool(["codesign", "-d", "-r-", str(app)])
     strict, _ = tool(["codesign", "--verify", "--deep", "--strict", "--verbose=2", str(app)])
-    spctl, assess = tool(["spctl", "--assess", "--type", "execute", "-vv", str(app)])
-    stapled, _ = tool(["xcrun", "stapler", "validate", str(app)])
+    leaf = cert_sha256(app) if cert_sha256 else leaf_certificate_sha256(app, tool)
     return AppStatus(
         zip=zip_path.name,
         sha256=sha256_file(zip_path),
         bundle_id=str(info.get("CFBundleIdentifier", "")),
         version=str(info.get("CFBundleShortVersionString", "")),
         signature=sig.kind,
-        team_id=sig.team_id,
+        authority=sig.authority,
         identifier=sig.identifier,
+        cert_sha256=leaf,
+        designated_requirement=parse_requirement(req),
         hardened_runtime=sig.hardened_runtime,
         codesign_strict=strict == 0,
-        spctl=spctl == 0,
-        spctl_source=parse_spctl_source(assess),
-        stapled=stapled == 0,
     )
 
 
@@ -174,29 +219,39 @@ def load_status(path: Path) -> AppStatus:
 # --- decide --------------------------------------------------------------------------------
 
 
-def not_release_ready(status: AppStatus, team_id: str = "") -> list[str]:
+def not_release_ready(status: AppStatus, pinned: str) -> list[str]:
     """Why this app may not ship in a final release; empty when it may."""
     reasons = []
-    if status.signature != DEVELOPER_ID:
-        reasons.append(f"signature is {status.signature}, not Developer ID Application")
-    if team_id and status.team_id != team_id:
-        reasons.append(f"team id is {status.team_id or 'not set'}, expected {team_id}")
+    if status.signature != CERTIFICATE:
+        reasons.append(
+            f"signature is {status.signature}, not the project's certificate "
+            "(an ad-hoc app makes users grant the permissions again on every upgrade)"
+        )
+    elif not pinned:
+        reasons.append(
+            "no certificate is pinned in packaging/macos/signing-cert.sha256 "
+            "(run scripts/release/make-signing-identity.sh once, see docs/release.md)"
+        )
+    elif status.cert_sha256 != pinned:
+        reasons.append(
+            f"signed by certificate {status.cert_sha256 or 'unknown'} "
+            f"({status.authority or 'no name'}), but {pinned} is pinned"
+        )
+    if status.signature == CERTIFICATE and not pins_certificate(
+        status.designated_requirement, sombra_app.BUNDLE_ID
+    ):
+        reasons.append(
+            "designated requirement does not pin the identifier and certificate: "
+            f"{status.designated_requirement or 'none'}"
+        )
     if not status.hardened_runtime:
         reasons.append("hardened runtime is off")
     if not status.codesign_strict:
         reasons.append("codesign --verify --deep --strict failed")
-    if not status.notarized:
-        reasons.append(
-            "not notarized (spctl --assess --type execute: "
-            f"{'accepted' if status.spctl else 'rejected'}, "
-            f"source={status.spctl_source or 'none'})"
-        )
-    if not status.stapled:
-        reasons.append("no stapled notarization ticket")
     return reasons
 
 
-def decide(status: AppStatus, tag_name: str, zip_path: Path, team_id: str = "") -> Decision:
+def decide(status: AppStatus, tag_name: str, zip_path: Path, pinned: str) -> Decision:
     try:
         tag = parse_tag(tag_name)
     except TagError as e:
@@ -215,11 +270,12 @@ def decide(status: AppStatus, tag_name: str, zip_path: Path, team_id: str = "") 
         integrity.append(f"bundle id is {status.bundle_id}, expected {sombra_app.BUNDLE_ID}")
     if integrity:
         return Decision(attach=False, refuse=True, reasons=integrity)
-    reasons = not_release_ready(status, team_id)
+    reasons = not_release_ready(status, pinned)
     if not reasons:
-        return Decision(attach=True, refuse=False)
-    if tag.prerelease:
-        return Decision(attach=False, refuse=False, reasons=reasons)
+        return Decision(attach=True, refuse=False, app_signature="pinned")
+    usable_adhoc = status.signature == ADHOC and status.codesign_strict
+    if tag.prerelease and usable_adhoc:
+        return Decision(attach=True, refuse=False, app_signature="adhoc", reasons=reasons)
     return Decision(attach=False, refuse=True, reasons=reasons)
 
 
@@ -230,15 +286,16 @@ def main(argv: Sequence[str] | None = None) -> int:
     rec.add_argument("--app", type=Path, required=True)
     rec.add_argument("--zip", type=Path, required=True)
     rec.add_argument("--output", type=Path, required=True)
+    pin_help = f"the certificate SHA-256 to require (default: {PINNED_FILE.name})"
     dec = sub.add_parser("decide", help="may this tag publish this app?")
     dec.add_argument("--status", type=Path, required=True)
     dec.add_argument("--tag", required=True)
     dec.add_argument("--zip", type=Path, required=True)
-    dec.add_argument("--team-id", default="", help="the Developer ID team it must carry")
+    dec.add_argument("--pinned-sha256", help=pin_help)
     dec.add_argument("--github-output", type=Path)
     rdy = sub.add_parser("ready", help="could this app ship in a final release?")
     rdy.add_argument("--status", type=Path, required=True)
-    rdy.add_argument("--team-id", default="")
+    rdy.add_argument("--pinned-sha256", help=pin_help)
     args = parser.parse_args(argv)
 
     if args.action == "record":  # pragma: no cover - runs the macOS tools
@@ -248,29 +305,30 @@ def main(argv: Sequence[str] | None = None) -> int:
         sys.stdout.write(text)
         return 0
 
+    pinned = normalize_fingerprint(args.pinned_sha256) if args.pinned_sha256 else read_pinned()
     if args.action == "ready":
-        reasons = not_release_ready(load_status(args.status), args.team_id)
+        reasons = not_release_ready(load_status(args.status), pinned)
         for reason in reasons:
             sys.stdout.write(f"not release-ready: {reason}\n")
         if not reasons:
-            sys.stdout.write("release-ready: Developer ID, hardened runtime, notarized, stapled\n")
+            sys.stdout.write(f"release-ready: signed by the pinned certificate {pinned}\n")
         return 1 if reasons else 0
 
-    decision = decide(load_status(args.status), args.tag, args.zip, args.team_id)
+    decision = decide(load_status(args.status), args.tag, args.zip, pinned)
     for reason in decision.reasons:
         level = "error" if decision.refuse else "warning"
         sys.stderr.write(f"::{level}::app gate ({args.tag}): {reason}\n")
     if decision.refuse:
         sys.stderr.write(
             f"app gate: refusing to publish {args.tag}: a final release needs Sombra.app "
-            "Developer ID signed, notarized and stapled (docs/release.md)\n"
+            "signed by the pinned certificate (docs/release.md)\n"
         )
         return 1
-    line = f"attach={str(decision.attach).lower()}\n"
-    sys.stdout.write(line)
+    lines = f"attach={str(decision.attach).lower()}\napp_signature={decision.app_signature}\n"
+    sys.stdout.write(lines)
     if args.github_output is not None:
         with args.github_output.open("a", encoding="utf-8") as f:
-            f.write(line)
+            f.write(lines)
     return 0
 
 

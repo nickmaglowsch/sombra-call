@@ -20,6 +20,7 @@ from sombra.config.doctor import (
     exit_code,
     holder_from_path,
     host_app,
+    parse_signature,
     read_os_release,
     render_json,
     render_text,
@@ -357,6 +358,7 @@ def test_permission_holder_sombra_app_is_ok(tmp_path: Path) -> None:
         tmp_path,
         tcc_holder=SOMBRA_HOLDER,
         running_app="/Applications/Sombra.app",
+        app_signature="certificate:Sombra Code Signing",
         host_app="Sombra",
     )
     checks = _by_name(run_checks(p))
@@ -465,3 +467,55 @@ def test_running_app() -> None:
     assert running_app(True, exe) == "/Applications/Sombra.app"
     assert running_app(False, exe) == ""
     assert running_app(True, "/build/dist/Sombra/Sombra") == ""
+
+
+def test_app_signature_certificate_keeps_the_grants(tmp_path: Path) -> None:
+    p = _probes(
+        tmp_path,
+        tcc_holder=SOMBRA_HOLDER,
+        running_app="/Applications/Sombra.app",
+        app_signature="certificate:Sombra Code Signing",
+    )
+    check = _by_name(run_checks(p))["app signature"]
+    assert check.status is Status.OK
+    assert "'Sombra Code Signing'" in check.detail
+    assert "survive upgrades" in check.detail
+
+
+def test_app_signature_ad_hoc_warns_that_grants_reset(tmp_path: Path) -> None:
+    p = _probes(
+        tmp_path,
+        tcc_holder=SOMBRA_HOLDER,
+        running_app="/Applications/Sombra.app",
+        app_signature="adhoc",
+    )
+    check = _by_name(run_checks(p))["app signature"]
+    assert check.status is Status.WARN
+    assert "forgets the permission grants on every upgrade" in check.detail
+
+
+def test_app_signature_unknown_warns(tmp_path: Path) -> None:
+    p = _probes(tmp_path, running_app="/Applications/Sombra.app", app_signature="")
+    check = _by_name(run_checks(p))["app signature"]
+    assert check.status is Status.WARN
+    assert "codesign -dv /Applications/Sombra.app" in check.fix
+
+
+def test_app_signature_not_checked_for_the_uv_install(tmp_path: Path) -> None:
+    assert "app signature" not in _by_name(run_checks(_probes(tmp_path)))
+
+
+@pytest.mark.parametrize(
+    ("output", "kind"),
+    [
+        (
+            "Identifier=x\nAuthority=Sombra Code Signing\nTeamIdentifier=not set\n",
+            "certificate:Sombra Code Signing",
+        ),
+        ("Identifier=x\nSignature=adhoc\nTeamIdentifier=not set\n", "adhoc"),
+        ("/Applications/Sombra.app: code object is not signed at all\n", "unsigned"),
+        ("codesign: no such file\n", ""),
+    ],
+)
+def test_parse_signature(output: str, kind: str) -> None:
+    assert parse_signature(output) == kind

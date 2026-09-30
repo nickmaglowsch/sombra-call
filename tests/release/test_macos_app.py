@@ -184,13 +184,15 @@ def test_signing_plan_is_inside_out(tmp_path: Path) -> None:
     assert [p.name for p in nested] == ["Nested.framework"]
 
 
-def test_commands_adhoc(tmp_path: Path) -> None:
+def test_commands(tmp_path: Path) -> None:
     bundle = _fake_app(tmp_path)
     ent = tmp_path / "entitlements.plist"
-    cmds = sign.commands(bundle, "-", ent, timestamp=True)
+    cmds = sign.commands(bundle, "0E2DE934", ent)
     for cmd in cmds[:-1]:
-        assert cmd[:6] == ["codesign", "--force", "--sign", "-", "--options", "runtime"]
-        assert "--timestamp=none" in cmd  # ad-hoc cannot carry a secure timestamp
+        assert cmd[:7] == [
+            *("codesign", "--force", "--sign", "0E2DE934"),
+            *("--options", "runtime", "--timestamp=none"),
+        ]
     shim, app_cmd, verify = cmds[-3], cmds[-2], cmds[-1]
     assert shim[-3:] == ["--identifier", sombra_app.SHIM_ID, str(bundle / sombra_app.SHIM_RELPATH)]
     assert app_cmd[-3:] == ["--entitlements", str(ent), str(bundle)]
@@ -202,13 +204,10 @@ def test_commands_adhoc(tmp_path: Path) -> None:
     )
 
 
-def test_commands_developer_id_timestamped_and_batched(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
+def test_commands_are_batched(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     bundle = _fake_app(tmp_path)
     monkeypatch.setattr(sign, "BATCH", 2)
-    cmds = sign.commands(bundle, "ABC123", tmp_path / "e.plist", timestamp=True)
-    assert all("--timestamp" in c for c in cmds[:-1])
+    cmds = sign.commands(bundle, "-", tmp_path / "e.plist")
     file_calls = [c for c in cmds if c[-1].endswith((".so", ".dylib", "Nested"))]
     assert [len(c) - 7 for c in file_calls] == [2, 2]  # 4 files in batches of 2
 

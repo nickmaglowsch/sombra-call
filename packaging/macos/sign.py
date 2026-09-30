@@ -1,14 +1,16 @@
 """Sign ``Sombra.app`` inside-out with the hardened runtime (ADR 0050)::
 
-    python packaging/macos/sign.py build/macos/dist/Sombra.app --identity -          # ad-hoc
-    python packaging/macos/sign.py Sombra.app --identity "$IDENTITY" --timestamp      # release
+    python packaging/macos/sign.py build/macos/dist/Sombra.app --identity -       # ad-hoc
+    python packaging/macos/sign.py Sombra.app --identity "$SHA1_OF_THE_CERTIFICATE"  # release
 
 Order matters: codesign seals what a bundle contains, so every nested Mach-O (dylibs,
 Python extension modules, the CLI shim) is signed first, deepest first, then any nested
 bundle (``.framework``/``.bundle``), then the app itself with the entitlements. Every
-signature uses the hardened runtime (``--options runtime``), which notarization requires.
-Ad-hoc (``--identity -``) signs the same way without a secure timestamp: that is what PR
-runs build and smoke-test, so the release path is the same code with a real identity.
+signature uses the hardened runtime (``--options runtime``): it stops ``DYLD_*``
+injection into a process that holds the user's Microphone and Screen Recording grants.
+The release identity is the project's self-signed certificate (ADR 0050), so there is no
+Apple timestamp. Ad-hoc (``--identity -``) signs the same way; that is what PR runs build
+and smoke-test, so the release path is the same code with another identity.
 
 It ends with ``codesign --verify --deep --strict``. Standard library only.
 """
@@ -71,18 +73,14 @@ def signing_plan(bundle: Path) -> tuple[list[Path], list[Path]]:
     return files, nested
 
 
-def codesign_base(identity: str, *, timestamp: bool) -> list[str]:
-    cmd = ["codesign", "--force", "--sign", identity, "--options", "runtime"]
-    # A secure timestamp is what notarization needs; ad-hoc signatures cannot have one.
-    cmd.append("--timestamp" if timestamp and identity != "-" else "--timestamp=none")
-    return cmd
+def codesign_base(identity: str) -> list[str]:
+    # No secure timestamp: Apple's timestamp service is for notarized Developer ID code.
+    return ["codesign", "--force", "--sign", identity, "--options", "runtime", "--timestamp=none"]
 
 
-def commands(
-    bundle: Path, identity: str, entitlements: Path, *, timestamp: bool
-) -> list[list[str]]:
+def commands(bundle: Path, identity: str, entitlements: Path) -> list[list[str]]:
     """Every codesign call, in order, ending with the strict verification."""
-    base = codesign_base(identity, timestamp=timestamp)
+    base = codesign_base(identity)
     files, nested = signing_plan(bundle)
     out: list[list[str]] = []
     for i in range(0, len(files), BATCH):
@@ -102,18 +100,11 @@ def _run(cmd: Sequence[str]) -> None:
     subprocess.run(list(cmd), check=True)  # noqa: S603  # argv we built, no shell
 
 
-def sign(
-    bundle: Path,
-    identity: str,
-    entitlements: Path,
-    *,
-    timestamp: bool = False,
-    run: Runner = _run,
-) -> int:
+def sign(bundle: Path, identity: str, entitlements: Path, *, run: Runner = _run) -> int:
     """Sign and verify; returns the number of codesign calls made."""
     if not (bundle / "Contents" / "Info.plist").is_file():
         raise FileNotFoundError(f"{bundle} is not an app bundle (no Contents/Info.plist)")
-    cmds = commands(bundle, identity, entitlements, timestamp=timestamp)
+    cmds = commands(bundle, identity, entitlements)
     for cmd in cmds:
         run(cmd)
     return len(cmds)
@@ -122,13 +113,14 @@ def sign(
 def main(argv: Sequence[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     parser.add_argument("bundle", type=Path)
-    parser.add_argument("--identity", default="-", help='"-" for ad-hoc, or a SHA-1 / name')
+    parser.add_argument(
+        "--identity", default="-", help='"-" for ad-hoc, or the certificate\'s SHA-1'
+    )
     parser.add_argument("--entitlements", type=Path, default=HERE / "entitlements.plist")
-    parser.add_argument("--timestamp", action="store_true", help="secure timestamp (release)")
     args = parser.parse_args(argv)
     files, nested = signing_plan(args.bundle)
     print(f"signing {len(files)} Mach-O files and {len(nested)} nested bundles", flush=True)
-    sign(args.bundle, args.identity, args.entitlements, timestamp=args.timestamp)
+    sign(args.bundle, args.identity, args.entitlements)
     return 0
 
 

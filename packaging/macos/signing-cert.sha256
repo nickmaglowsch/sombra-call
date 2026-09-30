@@ -1,0 +1,5 @@
+# SHA-256 of the certificate that signs every released Sombra.app (ADR 0050).
+# The release gate (scripts/release/app_gate.py) refuses a final release signed by anything
+# else, and macOS keys the users' permission grants on this certificate, so it never
+# changes. Create it once with scripts/release/make-signing-identity.sh, then put the
+# printed fingerprint on the line below (64 hex characters) through a PR.

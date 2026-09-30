@@ -7,8 +7,9 @@
 #   sh scripts/install.sh --from-app-zip Sombra-0.2.0-macos-arm64.zip --yes --no-models
 #   sh scripts/install.sh --uninstall
 #
-# On macOS it installs the signed Sombra.app (into /Applications, or ~/Applications) and
-# links its CLI shim onto PATH, so macOS grants the permissions to Sombra (ADR 0050).
+# On macOS it installs Sombra.app (into /Applications, or ~/Applications), signed with the
+# project's own certificate, and links its CLI shim onto PATH, so macOS grants the
+# permissions to Sombra (ADR 0050).
 # Elsewhere, or with --no-app, it installs uv (user directory, no sudo) if missing, then
 # Sombra as a uv tool on a uv-managed Python 3.12. Then it downloads the local models,
 # writes the default config and runs `sombra doctor`. Re-running upgrades in place.
@@ -443,10 +444,11 @@ install_app() {
     [ "$got" = "$BUNDLE_ID" ] || die "$zip holds an app with bundle id '$got', not $BUNDLE_ID"
     run codesign --verify --deep --strict "$unpack/Sombra.app" ||
         die "Sombra.app's code signature does not verify; not installing"
-    if spctl --assess --type execute "$unpack/Sombra.app" >/dev/null 2>&1; then
-        note "Gatekeeper accepts it (Developer ID signed and notarized)"
-    else
-        warn "Gatekeeper does not accept this Sombra.app (not notarized: a development build?)"
+    if codesign -dv "$unpack/Sombra.app" 2>&1 | grep -q '^Signature=adhoc'; then
+        warn "this Sombra.app is ad-hoc signed (a development build or a labelled pre-release): macOS will ask for the permissions again after every upgrade"
+    fi
+    if xattr -p com.apple.quarantine "$zip" >/dev/null 2>&1; then
+        note "$zip is quarantined (downloaded by a browser); the quarantine is removed below"
     fi
 
     if dest="$(installed_app)"; then
@@ -461,6 +463,10 @@ install_app() {
         fi
     fi
     run ditto "$unpack/Sombra.app" "$dest"
+    # Sombra.app is self-signed, not notarized (ADR 0050), so Gatekeeper blocks it when it
+    # carries com.apple.quarantine. curl sets none, but a browser-downloaded zip does and
+    # ditto copies it into the app: remove it.
+    run xattr -dr com.apple.quarantine "$dest" 2>/dev/null || true
     APP_PATH="$dest"
 
     # The app replaces a uv-tool install: one sombra on PATH, and it is the app's.
