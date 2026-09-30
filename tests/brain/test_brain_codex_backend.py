@@ -7,13 +7,16 @@ import pytest
 from sombra.brain.backend import BACKENDS, DEFAULT_BACKEND, create_brain
 from sombra.brain.claude import ClaudeBrain
 from sombra.brain.codex import CodexBrain
-from sombra.config.schema import BRAIN_BACKENDS, BrainConfig
+from sombra.config.schema import BACKEND_ALIASES, BRAIN_BACKENDS, BrainConfig
 from sombra.contracts import AutonomyLevel
 
 
 def test_config_and_brain_agree_on_backends() -> None:
-    assert BACKENDS == BRAIN_BACKENDS
-    assert BrainConfig().backend == DEFAULT_BACKEND
+    # create_brain builds the two in-package backends; the config names claude "claude-api"
+    # and adds "claude-code", which the orchestrator builds (#47).
+    assert set(BACKENDS) == {"claude", "codex"}
+    assert set(BRAIN_BACKENDS) == {"claude-code", "claude-api", "codex"}
+    assert BACKEND_ALIASES[DEFAULT_BACKEND] == BrainConfig().backend
 
 
 def test_codex_backend() -> None:

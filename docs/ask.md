@@ -13,7 +13,7 @@ sombra ask latest "O que estava no gráfico?" --frames           # let the agent
 
 | Option | Meaning |
 | --- | --- |
-| `--frames` | the agent may view screenshots (`frames/fNNNN.jpg`) by their `TELA` id. Without it, no image is sent to the API; the agent only sees window titles. |
+| `--frames` | the agent may view screenshots (`frames/fNNNN.jpg`) by their `TELA` id. Without it, no image is sent to the model; the agent only sees window titles. |
 | `--model` | model id or alias (`opus`, `sonnet`, `haiku`); default `[models] agent` from the user config |
 | `--config` | user config file (default `~/.config/sombra/config.toml`); `meetings_root` and `[user]` come from it |
 
@@ -21,11 +21,13 @@ The answer goes to stdout; the meeting folder, model, elapsed time, frames viewe
 
 ## How it answers
 
-The configured brain (the Claude backend, #9) starts **read-only** on the meeting folder with a post-meeting system prompt (`brain/system_prompt_ask_pt.md`): the whole transcript is in the prompt, `summary.md` is added when it exists, and the agent can grep and read `transcript.md`, `summary.md` and `context/`. It is told to cite every claim with the `[HH:MM:SS]` of the transcript line and, when the records do not hold the answer, to start with "Isso não está na transcrição." As in a live meeting, transcript, summary and context are passed as untrusted data, never as instructions.
+The configured brain (`[brain] backend`: `claude-api`, `claude-code` or `codex`, see [providers.md](providers.md)) starts **read-only** on the meeting folder with a post-meeting system prompt (`brain/system_prompt_ask_pt.md`): the whole transcript is in the prompt, `summary.md` is added when it exists, and the agent can grep and read `transcript.md`, `summary.md` and `context/`. It is told to cite every claim with the `[HH:MM:SS]` of the transcript line and, when the records do not hold the answer, to start with "Isso não está na transcrição." As in a live meeting, transcript, summary and context are passed as untrusted data, never as instructions.
 
-## API key
+Without `--frames`, `claude-api` strips every image from the requests. The CLI backends (`claude-code`, `codex`) read files with their own tools, so they are started on a private temporary copy of the meeting folder without `frames/`, removed right after the question.
 
-Until `sombra auth` stores the key in the OS keychain, `sombra ask` reads it from the `ANTHROPIC_API_KEY` environment variable. Never put it in a config file (they reject secret-looking keys).
+## Keys and logins
+
+`sombra ask` uses the backend `sombra setup` configured. `claude-api` reads the Anthropic key from the OS keychain (`sombra auth set anthropic`), and `codex` with `auth = "api-key"` reads the OpenAI key (`sombra auth set openai`). `claude-code` and `codex` with `auth = "subscription"` use the CLI's own login and never get a key. The `ANTHROPIC_API_KEY` environment variable is **not** read any more (#40): keys live only in the keychain, as for `sombra start`. Never put a key in a config file; they reject secret-looking keys.
 
 ## Nothing is written
 

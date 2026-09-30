@@ -206,7 +206,7 @@ def _plan(tmp_path: Path, level: AutonomyLevel, key: bool = False) -> LivePlan:
         started_at=T0,
         config=cfg,
         level=level,
-        api_key=(lambda: "k") if key else None,
+        summary=AnthropicTextModel(lambda: "k", model="claude-haiku-4-5") if key else None,
         agent_key=(lambda: "k") if key else None,
     )
 
@@ -224,6 +224,19 @@ def test_live_brain_and_summary_follow_the_level_and_key(tmp_path: Path) -> None
     cfg = dataclasses.replace(codex.config, brain=BrainConfig("codex"))
     codex = dataclasses.replace(codex, config=cfg)
     assert type(build_brain(codex)).__name__ == "CodexBrain"  # `codex login` suffices
+    for backend, auth, name in (
+        ("claude-code", None, "ClaudeCodeBrain"),  # the subscription: no key ever
+        ("codex", "subscription", "CodexBrain"),
+    ):
+        plan = dataclasses.replace(
+            codex, config=dataclasses.replace(cfg, brain=BrainConfig(backend, auth))
+        )
+        assert type(build_brain(plan)).__name__ == name
+    keyless = dataclasses.replace(
+        codex, config=dataclasses.replace(cfg, brain=BrainConfig("codex", "api-key"))
+    )
+    with pytest.raises(ValueError, match="auth set openai"):
+        build_brain(keyless)
 
 
 async def test_run_live_records_until_stopped(tmp_path: Path, socket_dir: Path) -> None:

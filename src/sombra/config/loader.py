@@ -17,8 +17,11 @@ from pathlib import Path
 from typing import Any, cast
 
 from sombra.config.schema import (
+    BACKEND_ALIASES,
+    BACKEND_AUTH,
     BRAIN_BACKENDS,
     DEFAULT_MEETINGS_ROOT,
+    SUMMARY_BACKENDS,
     AudioConfig,
     BrainConfig,
     ConfigError,
@@ -26,6 +29,7 @@ from sombra.config.schema import (
     ModelsConfig,
     Profile,
     RetentionConfig,
+    SummaryConfig,
     UserConfig,
     UserIdentity,
 )
@@ -204,7 +208,11 @@ def load_user_config(path: Path | None = None) -> UserConfig:
         summary=models_t.get_str("summary", d.models.summary) or d.models.summary,
     )
     brain_t = t.table("brain")
-    brain = BrainConfig(backend=brain_t.choice("backend", d.brain.backend, BRAIN_BACKENDS))
+    brain = _brain(brain_t, d.brain)
+    summary_t = t.table("summary")
+    summary = SummaryConfig(
+        backend=_backend(summary_t, "backend", d.summary.backend, SUMMARY_BACKENDS)
+    )
     cfg = UserConfig(
         meetings_root=Path(root or DEFAULT_MEETINGS_ROOT).expanduser(),
         autonomy_level=t.autonomy("autonomy_level", d.autonomy_level),
@@ -216,10 +224,33 @@ def load_user_config(path: Path | None = None) -> UserConfig:
         audio=audio,
         models=models,
         brain=brain,
+        summary=summary,
     )
-    for sub in (user_t, ret_t, audio_t, models_t, brain_t, t):
+    for sub in (user_t, ret_t, audio_t, models_t, brain_t, summary_t, t):
         sub.done()
     return cfg
+
+
+def _backend(t: _Table, key: str, default: str, allowed: tuple[str, ...]) -> str:
+    """A backend name; ``claude`` (the pre-#47 name) reads as ``claude-api``."""
+    value = t.get_str(key, None)
+    if value is None:
+        return default
+    value = BACKEND_ALIASES.get(value, value)
+    if value not in allowed:
+        raise t._err(key, f"must be one of {', '.join(allowed)}, got {value!r}")
+    return value
+
+
+def _brain(t: _Table, default: BrainConfig) -> BrainConfig:
+    backend = _backend(t, "backend", default.backend, BRAIN_BACKENDS)
+    modes = BACKEND_AUTH[backend]
+    auth = t.get_str("auth", None)
+    if auth is not None and auth not in modes:
+        raise t._err(
+            "auth", f"must be {' or '.join(repr(m) for m in modes)} for {backend}, got {auth!r}"
+        )
+    return BrainConfig(backend=backend, auth=auth)
 
 
 def load_profile(name: str, directory: Path | None = None) -> Profile:

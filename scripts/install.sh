@@ -395,9 +395,9 @@ run_doctor() {
     1. Fix anything 'sombra doctor' marked FAIL or warn above, then run it again.
        On macOS, grant Microphone, Screen Recording and Accessibility to the terminal
        app you run sombra from (System Settings > Privacy & Security).
-    2. Choose the agent provider: 'sombra setup' (coming with R4; Claude or Codex).
-    3. Or store an API key in the OS keychain: 'sombra auth set anthropic'.
-    4. Start your first meeting: sombra new "Daily" (see docs/install.md).
+    2. Choose the agent provider: 'sombra setup' (Claude or Codex, on your
+       subscription or an API key; see docs/providers.md).
+    3. First meeting: sombra start "Daily" on macOS (see docs/usage.md).
 EOF
 }
 

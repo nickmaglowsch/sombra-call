@@ -71,14 +71,14 @@ This runs `uv tool uninstall sombra` and, after you confirm, deletes the model f
 
 ## `sombra doctor`
 
-`sombra doctor` checks the machine and prints one line per check, `ok`, `warn` or `FAIL`, with the fix for anything that is not ok. It exits 1 when any check fails. `sombra doctor --json` prints the same as JSON (`{"ok": bool, "checks": [{"section", "name", "status", "detail", "fix"}]}`).
+`sombra doctor` checks the machine and prints one line per check, `ok`, `warn` or `FAIL`, with the fix for anything that is not ok. It exits 1 when any check fails. `sombra doctor --live` adds one test question through the configured agent. `sombra doctor --json` prints the same as JSON (`{"ok": bool, "checks": [{"section", "name", "status", "detail", "fix"}]}`).
 
 | Section | Checks |
 | --- | --- |
 | Sombra | sombra and Python versions; each model present and matching its SHA-256; free disk space where meetings go (warn under 5 GiB, fail under 1 GiB); the OS keychain (macOS Keychain, Linux Secret Service) reachable |
 | macOS | macOS 14+; Microphone, Screen Recording and Accessibility permissions; the default input device; the system-audio route (Core Audio process tap on 14.4+, or a loopback such as BlackHole) |
 | Linux | Ubuntu 22.04/24.04; live capture "not supported yet (ADR 0016)" as a warning |
-| Agent | `claude` and `codex` on `PATH`; `anthropic` and `openai` API keys in the keychain |
+| Agent | the configured backend (`[brain]`) and summary backend (`[summary]`), each with what it needs: the `claude` / `codex` CLI on `PATH` at its minimum version and logged in (read from `claude auth status` / `codex login status`, whose output is never printed), or the `anthropic` / `openai` key in the keychain. A missing CLI, login or key is a FAIL; a CLI logged in with an API key when you chose a subscription is a warning. `sombra doctor --live` also asks the agent one test question ([providers.md](providers.md)) |
 
 Permissions are read without triggering the macOS prompt. macOS grants them to **the app you run `sombra` from** (Terminal, iTerm, VS Code, ...), not to Sombra itself, so `doctor` names that app. To grant one: System Settings > Privacy & Security > Microphone (or Screen Recording, or Accessibility), enable that app, then restart it. The Screen Recording and Accessibility probes cannot tell "denied" from "not asked yet", so both show as a warning until granted. System Audio Recording (for the process tap) has no probe; macOS asks for it on the first meeting.
 
@@ -97,7 +97,7 @@ All take `--dir PATH` to use another folder. Files are downloaded to `<name>.par
 ## Next steps after installing
 
 1. Fix what `sombra doctor` reports and run it again until it is all `ok`.
-2. Choose the agent provider with `sombra setup` (added by R4), or store an API key in the keychain: `sombra auth set anthropic`.
+2. Choose the agent provider with `sombra setup`: Claude or Codex, on your subscription or an API key ([providers.md](providers.md)).
 3. Create your first meeting: `sombra new "Daily"` ([config.md](config.md)).
 
 ## Release assets the installer expects

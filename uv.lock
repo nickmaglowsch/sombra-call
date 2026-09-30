@@ -2212,6 +2212,7 @@ dependencies = [
     { name = "pywhispercpp" },
     { name = "rapidfuzz" },
     { name = "sounddevice", marker = "sys_platform == 'darwin'" },
+    { name = "tomlkit" },
 ]
 
 [package.optional-dependencies]
@@ -2244,6 +2245,7 @@ requires-dist = [
     { name = "pywhispercpp", specifier = ">=1.5.1" },
     { name = "rapidfuzz", specifier = ">=3.14.6" },
     { name = "sounddevice", marker = "sys_platform == 'darwin'", specifier = ">=0.5" },
+    { name = "tomlkit", specifier = ">=0.15.1" },
 ]
 provides-extras = ["window"]
 
@@ -2267,6 +2269,15 @@ sdist = { url = "https://files.pythonhosted.org/packages/ec/db/0c890e2d9aab9ba28
 wheels = [
     { url = "https://files.pythonhosted.org/packages/72/1f/62eef605172bddc1017508469a12f75bc7c4194ece35c734f822795f53b1/sounddevice-0.5.6-py3-none-any.whl", hash = "sha256:de099612311ad81e55d31ccbd83f43ea6bf4d87b48f9b6ea55a1fbcde0eee4e0", size = 32793, upload-time = "2026-08-17T07:54:57.507Z" },
     { url = "https://files.pythonhosted.org/packages/b6/84/85e719d49cf98b2f406d9ac9c338892286c4448eb42ef0b2625ccf159616/sounddevice-0.5.6-py3-none-macosx_10_6_x86_64.macosx_10_6_universal2.whl", hash = "sha256:e3aef00ad8b1d1740eb66d9a7671eab88a4d2b8fa4ab33498d742e63b65c309c", size = 1009647, upload-time = "2026-08-17T07:54:58.814Z" },
+]
+
+[[package]]
+name = "tomlkit"
+version = "0.15.1"
+source = { registry = "https://pypi.org/simple" }
+sdist = { url = "https://files.pythonhosted.org/packages/94/96/e07752635b98536177fa1f37671c8f3cdde2e724c6bcf6034b2cfb571565/tomlkit-0.15.1.tar.gz", hash = "sha256:e25bbf38843005246210a12982776f27f99cb9be67160e14434d0c0d21ee1e97", size = 180129, upload-time = "2026-07-17T01:48:04.562Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/13/bc/8c13eb66537dce1d2bd3a57132902f38d0e7f5bb46fa9f4daed9fe9d76ee/tomlkit-0.15.1-py3-none-any.whl", hash = "sha256:177a05aece5a8ca5266fd3c448abb47b8d352f09d477d3ca8332db4d89b24304", size = 49449, upload-time = "2026-07-17T01:48:05.728Z" },
 ]
 
 [[package]]

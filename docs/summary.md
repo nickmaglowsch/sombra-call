@@ -41,17 +41,18 @@ Package `sombra.summary` (PRD C4, M3; autonomy level L0). The orchestrator decid
 
 ## `sombra minutes <meeting>`
 
-Regenerates the minutes of a finished meeting. `<meeting>` is a folder path or a folder name under `~/Sombra/meetings/`.
+Regenerates the minutes of a finished meeting. `<meeting>` is `latest`, a folder path, a folder name under `meetings_root`, or a meeting name, as for `sombra ask`.
 
 ```sh
+uv run sombra minutes latest
 uv run sombra minutes ~/Sombra/meetings/2026-09-29_1430_daily-time-x
-uv run sombra minutes 2026-09-29_1430_daily-time-x --model claude-haiku-4-5
+uv run sombra minutes 2026-09-29_1430_daily-time-x --model haiku
 ```
 
-- Model: `claude-haiku-4-5` by default (cheap; minutes are not on the latency path), `--model` to change it.
-- API key: read from the OS keychain (macOS Keychain / Linux Secret Service) with `keyring`, service `sombra`, user `anthropic-api-key` (`keyring set sombra anthropic-api-key`). If none is stored, the `ANTHROPIC_API_KEY` environment variable is used; that fallback is a **dev-only convenience** (manual `network` tests, machines without a keychain backend), not the supported setup. Keys never go in config files or logs.
-- Exit codes: 0 written, 1 API or parse failure, 2 no `transcript.md`.
+- Backend: `[summary] backend` from the user config, which follows `[brain] backend` by default ([providers.md](providers.md)). `claude-code` and `codex` use the CLI's own login; `claude-api` uses the Anthropic key from the OS keychain (`sombra auth set anthropic`). No environment variable is read. The command lives in the orchestrator because `summary` does not read the config.
+- Model: `[models] summary` (default `haiku`), or `--model`.
+- Exit codes: 0 written, 1 model or parse failure, 2 unknown meeting, bad config, `[summary] backend = "none"` or no key.
 
 ## The `TextModel` port
 
-`summary` does not import `brain`. It calls `TextModel.complete(system, user, max_tokens) -> (text, Usage)`; `AnthropicTextModel(api_key=callable, model=...)` is the Messages API implementation. Meeting content goes only in the user turn, inside `<transcricao>`/`<resumo_anterior>`/`<parciais>` tags, and the system prompt tells the model it is data, not instructions. Any `<transcricao>`, `<resumo_anterior>` or `<parciais>` tag inside the content (any case or spacing) is rewritten to `‹…›` first, so meeting content cannot close the fence.
+`summary` does not import `brain`. It calls `TextModel.complete(system, user, max_tokens) -> (text, Usage)`; `AnthropicTextModel(api_key=callable, model=...)` is the Messages API implementation; `ClaudeCliTextModel` and `CodexCliTextModel` run the subscription CLIs ([ADR 0046](adr/0046-claude-code-backend.md)). Meeting content goes only in the user turn, inside `<transcricao>`/`<resumo_anterior>`/`<parciais>` tags, and the system prompt tells the model it is data, not instructions. Any `<transcricao>`, `<resumo_anterior>` or `<parciais>` tag inside the content (any case or spacing) is rewritten to `‹…›` first, so meeting content cannot close the fence.

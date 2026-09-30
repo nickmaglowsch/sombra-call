@@ -54,12 +54,57 @@ class ModelsConfig:
     summary: str = "haiku"  # rolling summary / minutes model alias
 
 
-BRAIN_BACKENDS = ("claude", "codex")
+# The agent that answers (PRD C5), and who pays for it (see docs/providers.md):
+#   claude-code  your logged-in Claude Code CLI, on a Claude Pro/Max subscription
+#   claude-api   Claude over the Messages API, with an Anthropic key from the keychain
+#   codex        your Codex CLI, on a ChatGPT plan (`codex login`) or an OpenAI key
+BRAIN_BACKENDS = ("claude-code", "claude-api", "codex")
+BACKEND_ALIASES = {"claude": "claude-api"}  # the pre-#47 name, kept for old config files
+DEFAULT_BACKEND = "claude-api"
+
+# How the backend is paid. claude-code is always a subscription and claude-api always
+# a key; codex can be either.
+AUTH_SUBSCRIPTION = "subscription"
+AUTH_API_KEY = "api-key"
+AUTH_MODES = (AUTH_SUBSCRIPTION, AUTH_API_KEY)
+BACKEND_AUTH: dict[str, tuple[str, ...]] = {
+    "claude-code": (AUTH_SUBSCRIPTION,),
+    "claude-api": (AUTH_API_KEY,),
+    "codex": AUTH_MODES,
+}
+
+# ``[summary] backend``: "follow" uses the agent's backend; "none" writes no rolling
+# summaries or minutes.
+SUMMARY_FOLLOW = "follow"
+SUMMARY_NONE = "none"
+SUMMARY_BACKENDS = (SUMMARY_FOLLOW, *BRAIN_BACKENDS, SUMMARY_NONE)
 
 
 @dataclass(frozen=True, slots=True)
 class BrainConfig:
-    backend: str = "claude"  # which agent answers: one of BRAIN_BACKENDS (C5)
+    backend: str = DEFAULT_BACKEND  # one of BRAIN_BACKENDS (C5)
+    # None: the backend's only mode; for codex, the pre-#47 behaviour (an OpenAI key
+    # from the keychain when one is stored, else the CLI's own login).
+    auth: str | None = None
+
+    @property
+    def uses_api_key(self) -> bool | None:
+        """True / False when the mode is fixed; None for codex without ``auth``."""
+        if self.auth is not None:
+            return self.auth == AUTH_API_KEY
+        modes = BACKEND_AUTH[self.backend]
+        return modes[0] == AUTH_API_KEY if len(modes) == 1 else None
+
+
+@dataclass(frozen=True, slots=True)
+class SummaryConfig:
+    backend: str = SUMMARY_FOLLOW  # one of SUMMARY_BACKENDS
+
+    def resolve(self, brain: BrainConfig) -> str | None:
+        """The backend that writes summaries and minutes, or None for ``none``."""
+        if self.backend == SUMMARY_NONE:
+            return None
+        return brain.backend if self.backend == SUMMARY_FOLLOW else self.backend
 
 
 @dataclass(frozen=True, slots=True)
@@ -74,6 +119,7 @@ class UserConfig:
     audio: AudioConfig = field(default_factory=AudioConfig)
     models: ModelsConfig = field(default_factory=ModelsConfig)
     brain: BrainConfig = field(default_factory=BrainConfig)
+    summary: SummaryConfig = field(default_factory=SummaryConfig)
 
 
 @dataclass(frozen=True, slots=True)

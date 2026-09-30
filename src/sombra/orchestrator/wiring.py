@@ -4,6 +4,10 @@ This is the one place where concrete packages meet. Every piece here is a thin
 adapter between a module's constructor and a :class:`Session` port or hook:
 
 * config values that need translating (the ``models.stt`` / ``models.agent`` aliases);
+* the agent provider (#47): :func:`build_agent_brain` and :func:`build_summary_model` turn
+  ``[brain]`` / ``[summary]`` into a ``Brain`` and a ``TextModel`` for every backend
+  (``claude-code``, ``claude-api``, ``codex``), and :func:`agent_key` finds the key a
+  backend needs in the keychain;
 * :class:`SummaryHooks`: ``summary``'s epoch summarizer and minutes as the
   ``summarizer`` / ``epoch_hook`` / ``minutes`` hooks (C4, M3);
 * :class:`PauseAdapter`: ``privacy.PauseController`` as a :class:`PauseState`;
@@ -23,6 +27,8 @@ from datetime import datetime
 from pathlib import Path
 
 from sombra.brain.backend import create_brain
+from sombra.brain.claude_code import ClaudeCodeBrain, ClaudeCodeSettings
+from sombra.config import BrainConfig, UserConfig
 from sombra.contracts import (
     ApprovalUI,
     AudioSource,
@@ -46,7 +52,15 @@ from sombra.orchestrator.settings import SessionSettings
 from sombra.privacy import PauseController
 from sombra.screen.pipeline import DedupeFramePipeline
 from sombra.store import MeetingStore
-from sombra.summary import EpochSummarizer, TextModel, append_epoch, write_minutes
+from sombra.summary import (
+    AnthropicTextModel,
+    ClaudeCliTextModel,
+    CodexCliTextModel,
+    EpochSummarizer,
+    TextModel,
+    append_epoch,
+    write_minutes,
+)
 from sombra.summary.epochs import DEFAULT_EPOCH_MINUTES
 from sombra.summary.minutes import SUMMARY_FILE
 from sombra.transcription import (
@@ -90,18 +104,93 @@ def resolve_claude_model(name: str) -> str:
     return resolve_model(name)
 
 
-def agent_model(backend: str, name: str) -> str | None:
-    """The model to pass the backend: a Claude alias means nothing to Codex (its default)."""
-    if backend == "claude":
-        return resolve_model(name)
-    if name.strip().casefold() in MODEL_ALIASES or name.strip().startswith("claude-"):
+# Pre-#47 name of claude-api, still accepted by the functions below.
+_LEGACY = {"claude": "claude-api"}
+DEFAULT_ALIAS = "default"  # ``models.agent = "default"``: let the backend choose
+
+
+def backend_model(backend: str, name: str) -> str | None:
+    """A ``[models]`` alias for one backend; None keeps the backend's own default.
+
+    * ``claude-api``: aliases become API model ids (``sonnet`` -> ``claude-sonnet-5-5``).
+    * ``claude-code``: passed as is; the CLI resolves ``sonnet`` / ``opus`` / ``haiku`` /
+      ``fable`` for your plan itself, and takes full ids too.
+    * ``codex``: a Claude alias or id means nothing to Codex, so it gets its default.
+    """
+    backend = _LEGACY.get(backend, backend)
+    name = name.strip()
+    if not name or name.casefold() == DEFAULT_ALIAS:
         return None
-    return name.strip() or None
+    if backend == "claude-api":
+        return resolve_model(name)
+    if backend == "claude-code":
+        return name
+    if name.casefold() in MODEL_ALIASES or name.startswith("claude-"):
+        return None
+    return name
+
+
+def agent_model(backend: str, name: str) -> str | None:
+    """The model to pass the agent backend (see :func:`backend_model`)."""
+    return backend_model(backend, name)
 
 
 def key_provider(backend: str) -> str:
     """Keychain provider holding the key of ``brain.backend``."""
     return OPENAI if backend == "codex" else ANTHROPIC
+
+
+Keys = Callable[[str], Callable[[], str] | None]
+"""``provider`` -> a lazy getter for its keychain key, or None when none is stored."""
+
+
+class MissingKeyError(ValueError):
+    """The configured backend is paid with an API key and none is stored."""
+
+
+def agent_key(brain: BrainConfig, keys: Keys) -> Callable[[], str] | None:
+    """The key the agent backend gets, or None when it runs on a CLI login.
+
+    ``claude-code`` never gets one (a key would move billing off the subscription);
+    ``codex`` with ``auth = "subscription"`` neither, even when an OpenAI key is stored.
+    Raises :class:`MissingKeyError` when the backend needs a key and none is stored.
+    """
+    uses_key = brain.uses_api_key
+    if brain.backend == "claude-code" or uses_key is False:
+        return None
+    provider = key_provider(brain.backend)
+    key = keys(provider)
+    if key is None and uses_key:
+        raise MissingKeyError(
+            f"{brain.backend} needs the {provider} API key: run `sombra auth set {provider}` "
+            "or `sombra setup`"
+        )
+    return key
+
+
+def build_summary_model(
+    backend: str | None, model: str, keys: Keys
+) -> tuple[TextModel | None, str | None]:
+    """``[summary]``'s resolved backend -> (text model, why there is none).
+
+    CLI-backed models use the CLI's own login and never get a key (ADR 0046).
+    """
+    if backend is None:
+        return None, '[summary] backend = "none": no rolling summaries or minutes'
+    backend = _LEGACY.get(backend, backend)
+    if backend == "claude-code":
+        return ClaudeCliTextModel(model=backend_model(backend, model)), None
+    if backend == "codex":
+        return CodexCliTextModel(model=backend_model(backend, model)), None
+    key = keys(ANTHROPIC)
+    if key is None:
+        return None, f"no {ANTHROPIC} key, so no summaries or minutes"
+    return AnthropicTextModel(key, model=resolve_model(model)), None
+
+
+def summary_model_for(cfg: UserConfig, keys: Keys) -> tuple[TextModel | None, str | None]:
+    """The user config's summary model (``[summary] backend``, ``[models] summary``)."""
+    return build_summary_model(cfg.summary.resolve(cfg.brain), cfg.models.summary, keys)
 
 
 # --- hooks -----------------------------------------------------------------------------
@@ -272,14 +361,29 @@ def build_agent_brain(
     level: AutonomyLevel,
     model: str,
 ) -> Brain:
-    """``brain.backend`` (``claude`` | ``codex``) through ``brain.backend.create_brain`` (C5)."""
+    """``brain.backend`` -> the live :class:`Brain` (C5).
+
+    ``claude-api`` and ``codex`` go through ``brain.backend.create_brain``; ``claude-code``
+    is :class:`ClaudeCodeBrain`, which never gets a key. ``api_key`` is what
+    :func:`agent_key` returned.
+    """
+    backend = _LEGACY.get(backend, backend)
+    if backend == "claude-code":
+        settings = ClaudeCodeSettings(
+            user_name,
+            tuple(aliases),
+            tuple(allowed_topics),
+            level,
+            model=backend_model(backend, model),
+        )
+        return ClaudeCodeBrain(settings)
     return create_brain(
-        backend,
+        "claude" if backend == "claude-api" else backend,
         user_name=user_name,
         aliases=tuple(aliases),
         allowed_topics=tuple(allowed_topics),
         level=level,
-        model=agent_model(backend, model),
+        model=backend_model(backend, model),
         api_key=api_key,
     )
 

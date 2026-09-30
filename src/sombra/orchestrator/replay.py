@@ -23,6 +23,7 @@ from datetime import datetime, timedelta
 from pathlib import Path
 
 from sombra.audio import FileAudioSource
+from sombra.config import BrainConfig
 from sombra.contracts import (
     SAMPLE_RATE,
     ActionKind,
@@ -205,7 +206,8 @@ class ReplayOptions:
     n_threads: int = 4
     use_gpu: bool = True
     agent_model: str = "sonnet"
-    backend: str = "claude"  # brain.backend: claude | codex
+    backend: str = "claude-api"  # brain.backend: claude-code | claude-api | codex
+    auth: str | None = None  # brain.auth (codex: subscription | api-key)
 
 
 def media_clock(start: datetime, speed: float) -> Clock:
@@ -225,7 +227,8 @@ async def run_replay(
 ) -> Path:
     """Replay the files into a new meeting folder under ``opts.meetings_root``; return it.
 
-    ``brain`` defaults to ``opts.backend`` with ``api_key`` (required for Claude);
+    ``brain`` defaults to ``opts.backend`` with ``api_key`` (required when the backend
+    is paid with a key: ``claude-api``, or ``codex`` with ``auth = "api-key"``);
     ``ui`` is required (the overlay, or AutoApproveUI). Without
     ``summary_model`` no epoch summaries or minutes are written.
     """
@@ -236,8 +239,8 @@ async def run_replay(
     if level is AutonomyLevel.L0:
         brain, ui = NoBrain(), SilentUI()
     if brain is None:
-        if opts.backend == "claude" and api_key is None:
-            raise ValueError("the Claude brain needs an API key (or use a scripted brain)")
+        if BrainConfig(opts.backend, opts.auth).uses_api_key and api_key is None:
+            raise ValueError(f"the {opts.backend} brain needs an API key (or a scripted brain)")
         brain = build_agent_brain(
             opts.backend,
             api_key,
