@@ -2,6 +2,7 @@
 
 import hashlib
 import json
+import plistlib
 from dataclasses import replace
 from pathlib import Path
 
@@ -14,12 +15,16 @@ from sombra.config.doctor import (
     Permission,
     Probes,
     Status,
+    TccHolder,
+    app_bundle_of,
     exit_code,
+    holder_from_path,
     host_app,
     read_os_release,
     render_json,
     render_text,
     run_checks,
+    running_app,
 )
 
 GIB = 1 << 30
@@ -59,6 +64,7 @@ def _probes(tmp_path: Path, **kw: object) -> Probes:
         accessibility_permission=lambda: Permission.GRANTED,
         default_input=lambda: "MacBook Pro Microphone",
         system_audio=lambda: "tap",
+        tcc_holder=TccHolder("iTerm", "com.googlecode.iterm2", "/Applications/iTerm.app"),
     )
     return replace(base, **kw)  # type: ignore[arg-type]
 
@@ -339,3 +345,123 @@ def test_missing_whisper_model_fix_names_the_model(tmp_path: Path) -> None:
     p = replace(p, models=(spec,))
     c = _by_name(run_checks(p))["model whisper tiny"]
     assert c.fix == "run `sombra models download tiny`"
+
+
+# --- which app holds the TCC grants (ADR 0050) ---------------------------------------------
+
+SOMBRA_HOLDER = TccHolder("Sombra", doctor.SOMBRA_BUNDLE_ID, "/Applications/Sombra.app")
+
+
+def test_permission_holder_sombra_app_is_ok(tmp_path: Path) -> None:
+    p = _probes(
+        tmp_path,
+        tcc_holder=SOMBRA_HOLDER,
+        running_app="/Applications/Sombra.app",
+        host_app="Sombra",
+    )
+    checks = _by_name(run_checks(p))
+    holder = checks["permissions holder"]
+    assert holder.status is Status.OK
+    assert holder.detail.startswith(f"Sombra ({doctor.SOMBRA_BUNDLE_ID}) at /Applications/")
+    assert "Sombra alone" in holder.detail
+    assert checks["microphone"].detail == "granted to Sombra"
+
+
+def test_permission_holder_terminal_for_the_uv_install_suggests_the_app(tmp_path: Path) -> None:
+    holder = TccHolder("Terminal", "com.apple.Terminal", "/System/Applications/Terminal.app")
+    check = _by_name(run_checks(_probes(tmp_path, tcc_holder=holder)))["permissions holder"]
+    assert check.status is Status.OK
+    assert check.detail.startswith("Terminal (com.apple.Terminal) at /System/")
+    assert "every program" in check.detail
+    assert "Sombra.app" in check.fix
+    assert "note: install Sombra.app" in render_text([check])
+
+
+def test_permission_holder_warns_when_the_app_runs_without_the_shim(tmp_path: Path) -> None:
+    holder = TccHolder("Terminal", "com.apple.Terminal", "/System/Applications/Terminal.app")
+    p = _probes(tmp_path, tcc_holder=holder, running_app="/Applications/Sombra.app")
+    check = _by_name(run_checks(p))["permissions holder"]
+    assert check.status is Status.WARN
+    assert "although sombra runs from /Applications/Sombra.app" in check.detail
+    assert "/Applications/Sombra.app/Contents/Helpers/sombra" in check.fix
+
+
+def test_permission_holder_outside_any_bundle(tmp_path: Path) -> None:
+    holder = TccHolder("sshd", "", "/usr/sbin/sshd")
+    check = _by_name(run_checks(_probes(tmp_path, tcc_holder=holder)))["permissions holder"]
+    assert check.status is Status.OK
+    assert check.detail.startswith("sshd at /usr/sbin/sshd:")
+
+
+def test_permission_holder_unreadable_is_a_warning(tmp_path: Path) -> None:
+    p = _probes(tmp_path, tcc_holder=None, host_app="Terminal")
+    check = _by_name(run_checks(p))["permissions holder"]
+    assert check.status is Status.WARN
+    assert "probably Terminal" in check.detail
+
+
+def test_permission_holder_not_on_linux(tmp_path: Path) -> None:
+    p = _probes(tmp_path, platform="linux", os_name="ubuntu", os_version="24.04")
+    assert "permissions holder" not in _by_name(run_checks(p))
+
+
+@pytest.mark.parametrize(
+    ("executable", "bundle"),
+    [
+        ("/Applications/Sombra.app/Contents/MacOS/Sombra", "/Applications/Sombra.app"),
+        (
+            "/Applications/Visual Studio Code.app/Contents/Frameworks/"
+            "Code Helper.app/Contents/MacOS/Code Helper",
+            "/Applications/Visual Studio Code.app",
+        ),
+        ("/usr/sbin/sshd", None),
+        ("", None),
+    ],
+)
+def test_app_bundle_of(executable: str, bundle: str | None) -> None:
+    assert app_bundle_of(executable) == bundle
+
+
+def test_holder_from_path_reads_the_bundle_info() -> None:
+    infos = {
+        Path("/Applications/Sombra.app"): {
+            "CFBundleName": "Sombra",
+            "CFBundleIdentifier": doctor.SOMBRA_BUNDLE_ID,
+        },
+        Path("/System/Applications/Utilities/Terminal.app"): {
+            "CFBundleDisplayName": "Terminal",
+            "CFBundleName": "Terminal-name",
+            "CFBundleIdentifier": "com.apple.Terminal",
+        },
+    }
+    sombra = holder_from_path("/Applications/Sombra.app/Contents/MacOS/Sombra", infos.__getitem__)
+    assert sombra == SOMBRA_HOLDER
+    terminal = holder_from_path(
+        "/System/Applications/Utilities/Terminal.app/Contents/MacOS/Terminal", infos.__getitem__
+    )
+    assert terminal == TccHolder(
+        "Terminal", "com.apple.Terminal", "/System/Applications/Utilities/Terminal.app"
+    )
+
+
+def test_holder_from_path_without_info_plist_uses_the_bundle_name(tmp_path: Path) -> None:
+    exe = tmp_path / "Weird.app" / "Contents" / "MacOS" / "weird"
+    assert holder_from_path(str(exe)) == TccHolder("Weird", "", str(tmp_path / "Weird.app"))
+    assert holder_from_path("/usr/bin/tmux") == TccHolder("tmux", "", "/usr/bin/tmux")
+
+
+def test_holder_from_path_reads_a_real_info_plist(tmp_path: Path) -> None:
+    bundle = tmp_path / "Sombra.app"
+    (bundle / "Contents").mkdir(parents=True)
+    (bundle / "Contents" / "Info.plist").write_bytes(
+        plistlib.dumps({"CFBundleName": "Sombra", "CFBundleIdentifier": doctor.SOMBRA_BUNDLE_ID})
+    )
+    holder = holder_from_path(str(bundle / "Contents" / "MacOS" / "Sombra"))
+    assert holder == TccHolder("Sombra", doctor.SOMBRA_BUNDLE_ID, str(bundle))
+
+
+def test_running_app() -> None:
+    exe = "/Applications/Sombra.app/Contents/MacOS/Sombra"
+    assert running_app(True, exe) == "/Applications/Sombra.app"
+    assert running_app(False, exe) == ""
+    assert running_app(True, "/build/dist/Sombra/Sombra") == ""

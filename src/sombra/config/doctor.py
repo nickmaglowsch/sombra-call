@@ -5,10 +5,11 @@ makes ``sombra doctor`` exit 1. Checks never talk to the OS directly: they read 
 ``Probes`` bundle, so they are unit-tested with fakes, and ``live_probes()`` builds
 the real one (pyobjc, ``keyring``, ``sounddevice`` imported lazily, never prompting).
 
-Sections: ``sombra`` (versions, models, disk, keychain), ``macos`` (TCC permissions,
-input device, system-audio route) or ``linux`` (live capture not built yet, ADR 0016),
-and ``agent`` (CLIs on PATH and API keys). The agent section is deliberately small and
-self-contained: the provider wizard (R4) replaces it with per-backend checks.
+Sections: ``sombra`` (versions, models, disk, keychain), ``macos`` (which app holds the
+TCC grants, the permissions, input device, system-audio route) or ``linux`` (live capture
+not built yet, ADR 0016), and ``agent`` (CLIs on PATH and API keys). The agent section
+is deliberately small and self-contained: the provider wizard (R4) replaces it with
+per-backend checks.
 
 This lives in ``config`` because it inspects several packages (``transcription``,
 ``privacy``, ``audio``) and ``config`` is a wiring package allowed to import them.
@@ -21,6 +22,7 @@ import hashlib
 import importlib
 import os
 import platform
+import plistlib
 import shutil
 import sys
 from collections.abc import Callable, Mapping
@@ -64,6 +66,20 @@ class ModelSpec:
     download: str = "sombra models download"  # the command that fetches it
 
 
+@dataclass(frozen=True, slots=True)
+class TccHolder:
+    """The app macOS attributes Sombra's permission requests to (its responsible process)."""
+
+    name: str
+    bundle_id: str = ""
+    path: str = ""  # the outermost .app, or the executable when it is in no bundle
+
+
+# Sombra.app's bundle id (packaging/macos/sombra_app.py, ADR 0050). TCC keys the grants on
+# it, so it never changes; a test checks both copies agree.
+SOMBRA_BUNDLE_ID = "io.github.nickmaglowsch.Sombra"
+SHIM_RELPATH = "Contents/Helpers/sombra"
+
 MIN_MACOS = (14, 0)
 UBUNTU_VERSIONS = ("22.04", "24.04")
 DISK_FAIL_BYTES = 1 << 30  # 1 GiB: not enough for a meeting's frames
@@ -85,7 +101,7 @@ class Probes:
     models_dir: Path
     models: tuple[ModelSpec, ...]
     data_dir: Path  # where meetings go; its disk is the one that fills up
-    host_app: str  # the app macOS grants permissions to (the terminal sombra runs in)
+    host_app: str  # the app macOS grants permissions to (Sombra.app, or the terminal)
     sha256: Callable[[Path], str]
     disk_free: Callable[[Path], int]
     which: Callable[[str], str | None]
@@ -97,6 +113,9 @@ class Probes:
     default_input: Callable[[], str | None] = lambda: None
     # "tap", or the loopback device's name, or None when there is no route
     system_audio: Callable[[], str | None] = lambda: None
+    # Who macOS holds responsible for this process; None when it cannot be read.
+    tcc_holder: TccHolder | None = None
+    running_app: str = ""  # the Sombra.app this sombra runs from; "" for the uv install
 
 
 # --- checks --------------------------------------------------------------------------
@@ -232,6 +251,48 @@ def check_macos_version(p: Probes) -> list[Check]:
     ]
 
 
+def check_permission_holder(p: Probes) -> list[Check]:
+    """Which app holds Microphone / Screen Recording / Accessibility (ADR 0050)."""
+    name = "permissions holder"
+    holder = p.tcc_holder
+    if holder is None:
+        return [
+            Check(
+                "macos",
+                name,
+                Status.WARN,
+                f"could not read the responsible process; probably {p.host_app}",
+            )
+        ]
+    where = f"{holder.name} ({holder.bundle_id})" if holder.bundle_id else holder.name
+    if holder.path:
+        where += f" at {holder.path}"
+    if holder.bundle_id == SOMBRA_BUNDLE_ID:
+        return [Check("macos", name, Status.OK, f"{where}: the grants belong to Sombra alone")]
+    if p.running_app:
+        return [
+            Check(
+                "macos",
+                name,
+                Status.WARN,
+                f"{where}, although sombra runs from {p.running_app}",
+                f"run sombra through the CLI shim {p.running_app}/{SHIM_RELPATH} "
+                "(install.sh links it onto PATH) so macOS asks for the grants as Sombra",
+            )
+        ]
+    return [
+        Check(
+            "macos",
+            name,
+            Status.OK,
+            f"{where}: sombra runs as a command-line tool, so its grants cover every "
+            "program run from there",
+            "install Sombra.app (install.sh does by default on macOS) so the grants "
+            "belong to Sombra alone",
+        )
+    ]
+
+
 def check_microphone(p: Probes) -> list[Check]:
     why = "needed for your voice (EU)"
     return [_permission_check("microphone", "Microphone", p.mic_permission(), p.host_app, why)]
@@ -291,6 +352,7 @@ def check_system_audio(p: Probes) -> list[Check]:
 
 MACOS_CHECKS: tuple[tuple[str, Callable[[Probes], list[Check]]], ...] = (
     ("macOS", check_macos_version),
+    ("permissions holder", check_permission_holder),
     ("microphone", check_microphone),
     ("screen recording", check_screen_recording),
     ("accessibility", check_accessibility),
@@ -455,6 +517,47 @@ def host_app(env: Mapping[str, str]) -> str:
     return "the app you run sombra from (Terminal, iTerm, your IDE)"
 
 
+def app_bundle_of(executable: str) -> str | None:
+    """The outermost ``.app`` bundle containing ``executable``, or None.
+
+    Outermost, because a helper inside an app (``Code Helper.app`` in ``Visual Studio
+    Code.app``) is shown in System Settings as the app that ships it.
+    """
+    parts = Path(executable).parts
+    for i, part in enumerate(parts):
+        if part.endswith(".app"):
+            return str(Path(*parts[: i + 1]))
+    return None
+
+
+def read_bundle_info(bundle: Path) -> Mapping[str, Any]:
+    with (bundle / "Contents" / "Info.plist").open("rb") as f:
+        info: Mapping[str, Any] = plistlib.load(f)
+    return info
+
+
+def holder_from_path(
+    executable: str, read_info: Callable[[Path], Mapping[str, Any]] = read_bundle_info
+) -> TccHolder:
+    """Name the app System Settings lists for the responsible process ``executable``."""
+    bundle = app_bundle_of(executable)
+    if bundle is None:
+        return TccHolder(Path(executable).name or executable, "", executable)
+    try:
+        info = read_info(Path(bundle))
+    except (OSError, plistlib.InvalidFileException, ValueError):
+        info = {}
+    name = info.get("CFBundleDisplayName") or info.get("CFBundleName") or Path(bundle).stem
+    return TccHolder(str(name), str(info.get("CFBundleIdentifier", "")), bundle)
+
+
+def running_app(frozen: bool, executable: str) -> str:
+    """The Sombra.app this interpreter runs from (PyInstaller build), or ""."""
+    if not frozen:
+        return ""
+    return app_bundle_of(executable) or ""
+
+
 def read_os_release(text: str) -> dict[str, str]:
     out = {}
     for line in text.splitlines():
@@ -480,6 +583,36 @@ def _has_key(provider: str) -> bool:
     except MissingApiKeyError:
         return False
     return True
+
+
+def _mac_responsible_path() -> str | None:  # pragma: no cover - macOS only
+    """The executable of the process TCC holds responsible for this one.
+
+    ``responsibility_get_pid_responsible_for_pid`` is private SPI in libSystem (it is
+    what TCC itself consults); ``proc_pidpath`` is public. None if either is missing.
+    """
+    libc = ctypes.CDLL(None)
+    responsible = getattr(libc, "responsibility_get_pid_responsible_for_pid", None)
+    if responsible is None:
+        return None
+    responsible.restype = ctypes.c_int
+    responsible.argtypes = [ctypes.c_int]
+    pid = responsible(os.getpid())
+    if pid <= 0:
+        return None
+    buf = ctypes.create_string_buffer(4096)
+    libc.proc_pidpath.restype = ctypes.c_int
+    libc.proc_pidpath.argtypes = [ctypes.c_int, ctypes.c_char_p, ctypes.c_uint32]
+    n = libc.proc_pidpath(pid, buf, ctypes.sizeof(buf))
+    return buf.value.decode("utf-8", "replace") if n > 0 else None
+
+
+def _mac_tcc_holder() -> TccHolder | None:  # pragma: no cover - macOS only
+    try:
+        path = _mac_responsible_path()
+    except Exception:  # a probe never crashes doctor; the check reports "could not read"
+        return None
+    return holder_from_path(path) if path else None
 
 
 def _mac_mic_permission() -> Permission:  # pragma: no cover - macOS only
@@ -577,9 +710,12 @@ def live_probes(
         ModelSpec("silero-vad", SILERO_VAD.filename, SILERO_VAD.sha256),
     )
     extra: dict[str, Any] = {}
+    app = running_app(bool(getattr(sys, "frozen", False)), sys.executable)
+    holder = None
     if sys.platform == "darwin":
         release = platform.mac_ver()[0]
         os_name = "macOS"
+        holder = _mac_tcc_holder()
         extra = {
             "mic_permission": _mac_mic_permission,
             "screen_permission": _mac_screen_permission,
@@ -603,7 +739,9 @@ def live_probes(
         models_dir=models_dir or default_models_dir(),
         models=models,
         data_dir=data_dir,
-        host_app=host_app(os.environ),
+        host_app=holder.name if holder else host_app(os.environ),
+        tcc_holder=holder,
+        running_app=app,
         sha256=file_sha256,
         disk_free=lambda path: shutil.disk_usage(path).free,
         which=shutil.which,

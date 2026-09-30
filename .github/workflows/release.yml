@@ -1,8 +1,14 @@
-# Tag-driven releases (issue #44, ADR 0044). See docs/release.md.
+# Tag-driven releases (issue #44, ADR 0044; Sombra.app: issue #50, ADR 0050). See docs/release.md.
 #
 # - push of a tag vX.Y.Z[-rcN|-betaN|-alphaN]: build → smoke install → publish a GitHub Release.
-# - pull_request touching the release files: the same build and smoke jobs, no publish,
-#   so the PR proves the pipeline.
+#   Sombra.app is built, Developer ID signed, notarized and stapled (app), then installed and
+#   verified on a clean Mac (app-smoke). publish runs the macOS release gate: a final tag is
+#   refused unless the app is signed, notarized and stapled.
+# - pull_request touching the release files: the same jobs, no publish, so the PR proves the
+#   pipeline. Without the Apple secrets (always on PRs) the app is ad-hoc signed and only
+#   uploaded as a workflow artifact.
+# - workflow_dispatch: the same as a PR, but signs and notarizes when the secrets exist, to
+#   test the Apple setup without pushing a tag.
 #
 # Not a required check: the ruleset only requires the jobs in ci.yml.
 name: Release
@@ -20,6 +26,9 @@ on:
       - uv.lock
       - src/sombra/__init__.py
       - src/sombra/cli.py
+      - src/sombra/config/doctor.py
+      - packaging/macos/**
+  workflow_dispatch:
 
 concurrency:
   group: release-${{ github.ref }}
@@ -163,10 +172,270 @@ jobs:
           print(types)
           assert types == ['trigger', 'suggestion', 'action'], types" "$dir"
 
+  app:
+    name: app (macos-14)
+    needs: build
+    runs-on: macos-14
+    timeout-minutes: 120 # notarization waits in Apple's queue
+    env:
+      # Developer ID + notarization for tags and manual runs, and only when the secrets
+      # exist. PRs and forks never get them: ad-hoc signature, artifact only (ADR 0050).
+      SIGN: ${{ (github.ref_type == 'tag' || github.event_name == 'workflow_dispatch') && secrets.MACOS_CERT_P12_BASE64 != '' && secrets.APPLE_NOTARY_KEY_P8_BASE64 != '' }}
+      EXPECTED_VERSION: ${{ needs.build.outputs.version }}
+    steps:
+      # packaging/macos and uv.lock (the pinned dependencies); the app is built from the wheel.
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v6
+      - uses: actions/download-artifact@v4
+        with:
+          name: dist
+          path: dist
+      - name: Build Sombra.app (PyInstaller, locked dependencies)
+        id: build
+        run: |
+          wheel=$(ls dist/sombra-*.whl)
+          uv run --no-project --python 3.12 packaging/macos/build.py --wheel "$wheel" \
+            --out "$RUNNER_TEMP/app" --github-output "$GITHUB_OUTPUT"
+      - name: Info.plist carries the release version and both localisations
+        env:
+          APP: ${{ steps.build.outputs.app }}
+        run: |
+          got=$(plutil -extract CFBundleShortVersionString raw -o - "$APP/Contents/Info.plist")
+          echo "CFBundleShortVersionString=$got"
+          test "$got" = "$EXPECTED_VERSION"
+          plutil -lint "$APP/Contents/Info.plist" "$APP"/Contents/Resources/*.lproj/InfoPlist.strings
+      - name: Import the Developer ID certificate
+        id: cert
+        if: env.SIGN == 'true'
+        env:
+          MACOS_CERT_P12_BASE64: ${{ secrets.MACOS_CERT_P12_BASE64 }}
+          MACOS_CERT_PASSWORD: ${{ secrets.MACOS_CERT_PASSWORD }}
+          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+        run: |
+          keychain="$RUNNER_TEMP/signing.keychain-db"
+          echo "keychain=$keychain" >> "$GITHUB_OUTPUT"
+          kc_pass=$(openssl rand -hex 24)
+          echo "::add-mask::$kc_pass"
+          printf '%s' "$MACOS_CERT_P12_BASE64" | base64 --decode > "$RUNNER_TEMP/cert.p12"
+          security create-keychain -p "$kc_pass" "$keychain"
+          security set-keychain-settings -lut 21600 "$keychain"
+          security unlock-keychain -p "$kc_pass" "$keychain"
+          security import "$RUNNER_TEMP/cert.p12" -k "$keychain" -P "$MACOS_CERT_PASSWORD" \
+            -T /usr/bin/codesign
+          rm -f "$RUNNER_TEMP/cert.p12"
+          security set-key-partition-list -S apple-tool:,apple:,codesign: -s -k "$kc_pass" \
+            "$keychain" > /dev/null
+          # shellcheck disable=SC2046 # one word per existing keychain path
+          security list-keychains -d user -s "$keychain" $(security list-keychains -d user | tr -d '"')
+          identity=$(security find-identity -v -p codesigning "$keychain" \
+            | grep "Developer ID Application" | grep "($APPLE_TEAM_ID)" | head -n 1 | awk '{print $2}')
+          if [ -z "$identity" ]; then
+            echo "::error::MACOS_CERT_P12_BASE64 holds no Developer ID Application identity for team APPLE_TEAM_ID"
+            exit 1
+          fi
+          echo "identity=$identity" >> "$GITHUB_OUTPUT"
+      - name: Sign every Mach-O inside-out (hardened runtime)
+        env:
+          APP: ${{ steps.build.outputs.app }}
+          IDENTITY: ${{ steps.cert.outputs.identity }}
+        run: |
+          if [ "$SIGN" = true ]; then
+            uv run --no-project --python 3.12 packaging/macos/sign.py "$APP" \
+              --identity "$IDENTITY" --timestamp
+          else
+            echo "::notice::No Apple signing secrets on this run: Sombra.app is ad-hoc signed, a workflow artifact only, never a release asset (ADR 0050)."
+            uv run --no-project --python 3.12 packaging/macos/sign.py "$APP" --identity -
+          fi
+      - name: Notarize (notarytool) and staple
+        if: env.SIGN == 'true'
+        env:
+          APP: ${{ steps.build.outputs.app }}
+          APPLE_NOTARY_KEY_ID: ${{ secrets.APPLE_NOTARY_KEY_ID }}
+          APPLE_NOTARY_ISSUER_ID: ${{ secrets.APPLE_NOTARY_ISSUER_ID }}
+          APPLE_NOTARY_KEY_P8_BASE64: ${{ secrets.APPLE_NOTARY_KEY_P8_BASE64 }}
+        run: |
+          key="$RUNNER_TEMP/notary.p8"
+          trap 'rm -f "$key"' EXIT
+          printf '%s' "$APPLE_NOTARY_KEY_P8_BASE64" | base64 --decode > "$key"
+          auth="--key $key --key-id $APPLE_NOTARY_KEY_ID --issuer $APPLE_NOTARY_ISSUER_ID"
+          ditto -c -k --sequesterRsrc --keepParent "$APP" "$RUNNER_TEMP/notarize.zip"
+          # shellcheck disable=SC2086 # $auth is a word list on purpose
+          out=$(xcrun notarytool submit "$RUNNER_TEMP/notarize.zip" $auth \
+            --wait --timeout 90m --output-format json) || true
+          echo "$out"
+          id=$(printf '%s' "$out" | python3 -c 'import json,sys; print(json.load(sys.stdin).get("id", ""))' || true)
+          status=$(printf '%s' "$out" | python3 -c 'import json,sys; print(json.load(sys.stdin).get("status", ""))' || true)
+          if [ -n "$id" ]; then
+            # shellcheck disable=SC2086
+            xcrun notarytool log "$id" $auth || true
+          fi
+          if [ "$status" != Accepted ]; then
+            echo "::error::notarization status: ${status:-no answer}; see the log above"
+            exit 1
+          fi
+          xcrun stapler staple "$APP"
+          xcrun stapler validate "$APP"
+          spctl --assess --type execute -vv "$APP"
+      - name: Zip with ditto and report the size
+        env:
+          APP: ${{ steps.build.outputs.app }}
+        run: |
+          mkdir -p app-dist
+          zip="app-dist/Sombra-$EXPECTED_VERSION-macos-arm64.zip"
+          ditto -c -k --sequesterRsrc --keepParent "$APP" "$zip"
+          app_mb=$(du -sm "$APP" | cut -f 1)
+          zip_mb=$(( $(stat -f %z "$zip") / 1048576 ))
+          files=$(find "$APP" -type f | wc -l | tr -d ' ')
+          signature=$([ "$SIGN" = true ] && echo "Developer ID, notarized, stapled" || echo "ad-hoc (no Apple secrets)")
+          {
+            echo "### Sombra.app $EXPECTED_VERSION"
+            echo ""
+            echo "| | |"
+            echo "| --- | --- |"
+            echo "| signature | $signature |"
+            echo "| app on disk | ${app_mb} MB, ${files} files |"
+            echo "| $(basename "$zip") | ${zip_mb} MB |"
+          } | tee -a "$GITHUB_STEP_SUMMARY"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: macos-app
+          path: app-dist/
+          if-no-files-found: error
+          retention-days: 14
+      - name: Remove the signing keychain
+        if: always() && steps.cert.outputs.keychain != ''
+        env:
+          KEYCHAIN: ${{ steps.cert.outputs.keychain }}
+        run: security delete-keychain "$KEYCHAIN" || true
+
+  app-smoke:
+    name: app-smoke (macos-14)
+    needs: [build, app]
+    runs-on: macos-14
+    timeout-minutes: 30
+    env:
+      EXPECTED_VERSION: ${{ needs.build.outputs.version }}
+    steps:
+      # A clean Mac: install the zip the way users get it (install.sh), then check it.
+      - uses: actions/download-artifact@v4
+        with:
+          name: dist
+          path: dist
+      - uses: actions/download-artifact@v4
+        with:
+          name: macos-app
+          path: macos-app
+      # The gate script, the bundle definition and the e2e fixture only; never the source.
+      - uses: actions/checkout@v4
+        with:
+          path: repo
+          sparse-checkout: |
+            scripts/release
+            packaging/macos
+            tests/fixtures/e2e
+          sparse-checkout-cone-mode: false
+      - uses: astral-sh/setup-uv@v6
+        with:
+          enable-cache: false
+      - name: Install with install.sh (Sombra.app + CLI shim)
+        run: |
+          zip=$(ls macos-app/Sombra-*-macos-arm64.zip)
+          sh dist/install.sh --from-app-zip "$zip" --yes --no-models
+          echo "$HOME/.local/bin" >> "$GITHUB_PATH"
+          app=/Applications/Sombra.app
+          test -d "$app" || app="$HOME/Applications/Sombra.app"
+          echo "APP=$app" >> "$GITHUB_ENV"
+          echo "ZIP=$zip" >> "$GITHUB_ENV"
+      - name: codesign --verify --deep --strict
+        run: |
+          ls -l "$HOME/.local/bin/sombra"
+          codesign --verify --deep --strict --verbose=2 "$APP"
+          codesign -dv --verbose=4 "$APP"
+          codesign -dv --verbose=4 "$APP/Contents/Helpers/sombra"
+          codesign -d --entitlements - "$APP"
+      - name: Record the release-gate evidence (codesign, spctl, stapler)
+        run: |
+          uv run --no-project --python 3.12 repo/scripts/release/app_gate.py record \
+            --app "$APP" --zip "$ZIP" --output app-status.json
+      - name: sombra --version (through the shim)
+        run: |
+          got=$(sombra --version)
+          echo "$got"
+          test "$got" = "sombra $EXPECTED_VERSION"
+          test "$(plutil -extract CFBundleShortVersionString raw -o - "$APP/Contents/Info.plist")" = "$EXPECTED_VERSION"
+      - name: sombra doctor --json (Sombra holds the TCC grants)
+        run: |
+          set -u
+          # Exit 1 is expected: --no-models leaves the models missing (a FAIL).
+          sombra doctor --json > doctor.json && code=0 || code=$?
+          cat doctor.json
+          test "$code" -le 1
+          python3 - <<'EOF'
+          import json
+          data = json.load(open("doctor.json"))
+          names = {c["name"]: c for c in data["checks"]}
+          assert names["sombra"]["status"] == "ok", names["sombra"]
+          assert names["python"]["detail"].startswith("Python 3.12"), names["python"]
+          holder = names["permissions holder"]
+          # The shim disclaimed responsibility: macOS attributes this process to Sombra.app.
+          assert holder["status"] == "ok", holder
+          assert holder["detail"].startswith("Sombra (io.github.nickmaglowsch.Sombra) at "), holder
+          fails = [c for c in data["checks"] if c["status"] == "fail"]
+          unexpected = [c for c in fails if not c["name"].startswith("model ")]
+          assert not unexpected, unexpected
+          crashed = [c for c in data["checks"] if c["detail"].startswith("could not check")]
+          assert not crashed, crashed
+          EOF
+      - name: Without the shim, the terminal side stays responsible (control)
+        run: |
+          "$APP/Contents/MacOS/Sombra" doctor --json > direct.json || true
+          python3 -c '
+          import json
+          c = {c["name"]: c for c in json.load(open("direct.json"))["checks"]}["permissions holder"]
+          print(c)
+          assert not c["detail"].startswith("Sombra ("), c'
+      - name: Cache models (whisper tiny + Silero VAD)
+        uses: actions/cache@v4
+        with:
+          path: ~/.cache/sombra/models
+          key: release-smoke-models-${{ runner.os }}-${{ runner.arch }}-tiny-vad
+      - name: sombra models download tiny
+        run: sombra models download tiny
+      - name: sombra replay (fake brain, e2e fixture)
+        run: |
+          fx=repo/tests/fixtures/e2e
+          out=$(sombra replay "$fx/me.wav" "$fx/others.wav" --frames "$fx/frames" \
+            --user Maria --fake-brain --auto-approve --stt-model tiny \
+            --name release-smoke --root "$RUNNER_TEMP/meetings")
+          echo "$out"
+          dir=$(echo "$out" | head -n 1)
+          test -s "$dir/transcript.md"
+          python3 -c "
+          import json, pathlib, sys
+          log = pathlib.Path(sys.argv[1], 'log.jsonl').read_text().splitlines()
+          types = [json.loads(line)['type'] for line in log]
+          print(types)
+          assert types == ['trigger', 'suggestion', 'action'], types" "$dir"
+      - name: The release gate would refuse this build for a final tag (unless notarized)
+        run: |
+          python3 -c 'import json; print(json.dumps(json.load(open("app-status.json")), indent=2))'
+          if uv run --no-project --python 3.12 repo/scripts/release/app_gate.py ready \
+            --status app-status.json; then
+            echo "Developer ID signed, notarized and stapled: a final tag may publish it."
+          else
+            echo "::notice::Not release-ready (expected without the Apple secrets): a final tag would refuse to publish; a pre-release would publish without the app."
+          fi
+      - uses: actions/upload-artifact@v4
+        with:
+          name: macos-app-status
+          path: app-status.json
+          if-no-files-found: error
+          retention-days: 14
+
   publish:
     name: publish
     if: github.event_name == 'push' && github.ref_type == 'tag'
-    needs: [build, smoke]
+    needs: [build, smoke, app, app-smoke]
     runs-on: ubuntu-latest
     permissions:
       contents: write
@@ -179,8 +448,35 @@ jobs:
         with:
           name: dist
           path: dist
+      - uses: actions/download-artifact@v4
+        with:
+          name: macos-app
+          path: macos-app
+      - uses: actions/download-artifact@v4
+        with:
+          name: macos-app-status
+          path: macos-app-status
+      # ADR 0050: a final tag publishes only with a Developer ID signed, notarized and stapled
+      # Sombra.app (spctl --assess passed in app-smoke); a pre-release without one publishes
+      # without the app. Refusing fails this job, so nothing is published.
+      - name: macOS release gate
+        id: gate
+        env:
+          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+        run: |
+          zip=$(ls macos-app/Sombra-*-macos-arm64.zip)
+          uv run --no-project --python 3.12 scripts/release/app_gate.py decide \
+            --status macos-app-status/app-status.json --tag "$GITHUB_REF_NAME" --zip "$zip" \
+            --team-id "$APPLE_TEAM_ID" --github-output "$GITHUB_OUTPUT"
+      - name: Add Sombra.app to the assets and rewrite SHA256SUMS
+        if: steps.gate.outputs.attach == 'true'
+        run: |
+          cp macos-app/Sombra-*-macos-arm64.zip dist/
+          uv run --no-project --python 3.12 scripts/release/checksums.py write dist
       - name: Verify SHA256SUMS
-        run: uv run --no-project --python 3.12 scripts/release/checksums.py verify dist
+        run: |
+          uv run --no-project --python 3.12 scripts/release/checksums.py verify dist
+          (cd dist && sha256sum -c SHA256SUMS)
       - name: Release notes from merged PR titles
         run: |
           uv run --no-project --python 3.12 scripts/release/notes.py "$GITHUB_REF_NAME" \
