@@ -1,6 +1,8 @@
-"""``sombra ask`` (see :mod:`.ask`), ``sombra start`` (live meeting, macOS) and ``sombra replay``.
+"""``sombra ask`` (:mod:`.ask`), ``start`` (live, macOS), ``replay`` and ``minutes``.
 
-``start`` and ``replay`` are documented in docs/usage.md.
+``start`` and ``replay`` are documented in docs/usage.md, ``minutes`` in docs/summary.md.
+All four build the agent and the summary model from ``[brain]`` / ``[summary]`` in the
+user config (#47, docs/providers.md), with keys only from the OS keychain.
 """
 
 from __future__ import annotations
@@ -27,6 +29,7 @@ LEVELS = ("L0", "L1", "L2")
 def register(subparsers: argparse._SubParsersAction[argparse.ArgumentParser]) -> None:
     _register_ask(subparsers)
     _register_meeting(subparsers)
+    _register_minutes(subparsers)
 
 
 def _register_meeting(subparsers: argparse._SubParsersAction[argparse.ArgumentParser]) -> None:
@@ -83,7 +86,7 @@ def report_text(meeting_dir: Path) -> str:
     return render(reports, aggregate(reports), "text")
 
 
-def _key_lookup(provider: str) -> Callable[[], str] | None:
+def key_lookup(provider: str) -> Callable[[], str] | None:
     """``provider``'s keychain key as a lazy getter, or None when none is stored."""
     from sombra.privacy import SecretsError, get_api_key
 
@@ -113,7 +116,7 @@ def run_start(
     args: argparse.Namespace,
     *,
     platform: str = sys.platform,
-    keys: Keys = _key_lookup,
+    keys: Keys = key_lookup,
     confirm: Callable[[str], bool] | None = None,
     runner: Callable[[Any, argparse.Namespace], None] | None = None,
     preflight: Callable[[str], object] | None = None,
@@ -123,7 +126,8 @@ def run_start(
     from sombra.config import ConfigError, load_profile, load_user_config
     from sombra.contracts import AutonomyLevel
     from sombra.orchestrator.live import LivePlan, discard_meeting
-    from sombra.orchestrator.wiring import ANTHROPIC, OPENAI, check_models
+    from sombra.orchestrator.wiring import MissingKeyError, check_models, summary_model_for
+    from sombra.orchestrator.wiring import agent_key as agent_key_for
     from sombra.privacy import ConsentRefusedError, check_disk_encryption, require_consent
     from sombra.store import create_meeting, read_started_at
 
@@ -150,14 +154,16 @@ def run_start(
     except (FileNotFoundError, ValueError) as e:
         err.write(f"sombra start: {e}\n")
         return 2
-    backend = cfg.brain.backend
-    api_key = keys(ANTHROPIC)
-    agent_key = api_key if backend == "claude" else keys(OPENAI)
-    if level is not AutonomyLevel.L0 and backend == "claude" and agent_key is None:
-        err.write(f"sombra start: no API key; run `sombra auth set {ANTHROPIC}`\n")
-        return 2
-    if api_key is None:
-        err.write(f"sombra start: no {ANTHROPIC} key, so no summaries or minutes\n")
+    agent_key = None
+    if level is not AutonomyLevel.L0:
+        try:
+            agent_key = agent_key_for(cfg.brain, keys)
+        except MissingKeyError as e:
+            err.write(f"sombra start: {e}\n")
+            return 2
+    summary, why_not = summary_model_for(cfg, keys)
+    if why_not is not None:
+        err.write(f"sombra start: {why_not}\n")
 
     try:
         meeting_dir = create_meeting(
@@ -191,7 +197,7 @@ def run_start(
         level=level,
         allowed_topics=profile.allowed_topics if profile else (),
         window=args.window,
-        api_key=api_key,
+        summary=summary,
         agent_key=agent_key,
     )
     out.write(f"{meeting_dir}\n")
@@ -220,7 +226,7 @@ def _run_live(plan: Any, args: argparse.Namespace) -> None:  # pragma: no cover 
 def run_replay_command(
     args: argparse.Namespace,
     *,
-    keys: Keys = _key_lookup,
+    keys: Keys = key_lookup,
     out: TextIO | None = None,
     err: TextIO | None = None,
 ) -> int:
@@ -249,17 +255,20 @@ def run_replay_command(
     if level is not AutonomyLevel.L0 and not user:
         err.write("sombra replay: pass --user or set [user] name in the config\n")
         return 2
-    from sombra.orchestrator.wiring import ANTHROPIC, OPENAI
+    from sombra.orchestrator.wiring import MissingKeyError, summary_model_for
+    from sombra.orchestrator.wiring import agent_key as agent_key_for
 
-    # --fake-brain and L0 replays never call an API (no key asked, no minutes).
-    backend = cfg.brain.backend
-    api_key = agent_key = None
+    # --fake-brain and L0 replays never call a model (no key asked, no minutes).
+    agent_key = summary = None
     if level is not AutonomyLevel.L0 and not args.fake_brain:
-        api_key = keys(ANTHROPIC)
-        agent_key = api_key if backend == "claude" else keys(OPENAI)
-        if backend == "claude" and agent_key is None:
-            err.write("sombra replay: no API key; `sombra auth set anthropic` or --fake-brain\n")
+        try:
+            agent_key = agent_key_for(cfg.brain, keys)
+        except MissingKeyError as e:
+            err.write(f"sombra replay: {e} (or pass --fake-brain)\n")
             return 2
+        summary, why_not = summary_model_for(cfg, keys)
+        if why_not is not None:
+            err.write(f"sombra replay: {why_not}\n")
 
     from sombra.orchestrator.replay import ReplayOptions
 
@@ -275,18 +284,18 @@ def run_replay_command(
         level=level,
         stt_model=args.stt_model or cfg.models.stt,
         agent_model=cfg.models.agent,
-        backend=backend,
+        backend=cfg.brain.backend,
+        auth=cfg.brain.auth,
     )
     _setup_logging()
     try:
         meeting_dir = asyncio.run(
             _replay(
                 opts,
-                api_key,
+                summary,
                 agent_key,
                 fake_brain=args.fake_brain,
                 auto_approve=args.auto_approve,
-                summary_model=cfg.models.summary,
             )
         )
     except (FileNotFoundError, ValueError) as e:  # e.g. whisper model not downloaded
@@ -298,21 +307,15 @@ def run_replay_command(
 
 async def _replay(
     opts: Any,
-    api_key: Callable[[], str] | None,
+    summary: Any,
     agent_key: Callable[[], str] | None,
     *,
     fake_brain: bool,
     auto_approve: bool,
-    summary_model: str,
 ) -> Path:
     from sombra.orchestrator.replay import AutoApproveUI, ScriptedBrain, run_replay
-    from sombra.orchestrator.wiring import resolve_claude_model
-    from sombra.summary import AnthropicTextModel
 
     brain: Brain | None = ScriptedBrain() if fake_brain else None
-    summary = None
-    if api_key is not None:
-        summary = AnthropicTextModel(api_key, model=resolve_claude_model(summary_model))
     if not auto_approve:
         return await _replay_with_overlay(opts, brain, summary, agent_key)
     return await run_replay(
@@ -372,10 +375,10 @@ def _ask(args: argparse.Namespace) -> int:
     return run(args)
 
 
-def _claude(meeting_dir: Path, cfg: UserConfig, args: argparse.Namespace) -> Brain:
-    from sombra.orchestrator.ask import claude_brain
+def _configured(meeting_dir: Path, cfg: UserConfig, args: argparse.Namespace) -> Brain:
+    from sombra.orchestrator.ask import ask_brain
 
-    return claude_brain(meeting_dir, cfg, frames=args.frames, model=args.model)
+    return ask_brain(meeting_dir, cfg, frames=args.frames, keys=key_lookup, model=args.model)
 
 
 def run(
@@ -397,7 +400,7 @@ def run(
 
     out = out if out is not None else sys.stdout
     err = err if err is not None else sys.stderr
-    factory = make_brain if make_brain is not None else _claude
+    factory = make_brain if make_brain is not None else _configured
     try:
         cfg = load_user_config(args.config)
         meeting_dir = resolve_meeting(args.meeting, cfg.meetings_root)
@@ -426,4 +429,68 @@ def run(
         f"{u.cache_read_input_tokens} cache read, {u.cache_creation_input_tokens} cache write"
     )
     err.write(" · ".join(details) + "\n")
+    return 0
+
+
+# --- sombra minutes --------------------------------------------------------------------
+
+
+def _register_minutes(subparsers: argparse._SubParsersAction[argparse.ArgumentParser]) -> None:
+    p = subparsers.add_parser(
+        "minutes", help="(re)generate the minutes (## Ata) in a meeting's summary.md"
+    )
+    p.add_argument(
+        "meeting", help="'latest', a meeting folder path, a folder name, or a meeting name"
+    )
+    p.add_argument("--model", help="model id or alias (default: [models] summary in config)")
+    p.add_argument(
+        "--config", type=Path, help="user config file (default: ~/.config/sombra/config.toml)"
+    )
+    p.set_defaults(func=run_minutes)
+
+
+def run_minutes(
+    args: argparse.Namespace,
+    *,
+    keys: Keys = key_lookup,
+    out: TextIO | None = None,
+    err: TextIO | None = None,
+) -> int:
+    """Write the minutes with the configured summary backend (``[summary]``)."""
+    from sombra.config import ConfigError, load_user_config
+    from sombra.orchestrator.ask import MeetingNotFoundError, resolve_meeting
+    from sombra.orchestrator.wiring import build_summary_model
+    from sombra.store import read_started_at
+    from sombra.summary import write_minutes
+    from sombra.summary.minutes import SUMMARY_FILE
+
+    out = out if out is not None else sys.stdout
+    err = err if err is not None else sys.stderr
+    try:
+        cfg = load_user_config(args.config)
+        meeting_dir = resolve_meeting(args.meeting, cfg.meetings_root)
+    except (ConfigError, MeetingNotFoundError) as e:
+        err.write(f"sombra minutes: {e}\n")
+        return 2
+    backend = cfg.summary.resolve(cfg.brain)
+    model, why_not = build_summary_model(backend, args.model or cfg.models.summary, keys)
+    if model is None:
+        err.write(f"sombra minutes: {why_not}; see `sombra setup`\n")
+        return 2
+    try:
+        day = read_started_at(meeting_dir)
+    except (OSError, ValueError):
+        day = None  # write_minutes falls back to today
+    try:
+        result = write_minutes(meeting_dir, model, day=day)
+    except Exception as e:  # any model or parse failure is exit code 1
+        err.write(f"sombra minutes: {type(e).__name__}: {e}\n")
+        return 1
+    u = result.usage
+    out.write(
+        f"Ata escrita em {meeting_dir / SUMMARY_FILE}: {len(result.minutes.actions)} itens de "
+        f"ação, {len(result.dropped)} descartados (horário inexistente); {result.calls} "
+        f"chamadas ({model.name}), {u.input_tokens} tokens de entrada, "
+        f"{u.output_tokens} de saída.\n"
+    )
     return 0

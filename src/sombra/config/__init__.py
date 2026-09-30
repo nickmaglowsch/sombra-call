@@ -23,6 +23,7 @@ from sombra.config.schema import (
     ModelsConfig,
     Profile,
     RetentionConfig,
+    SummaryConfig,
     UserConfig,
     UserIdentity,
 )
@@ -35,6 +36,7 @@ __all__ = [
     "ModelsConfig",
     "Profile",
     "RetentionConfig",
+    "SummaryConfig",
     "UserConfig",
     "UserIdentity",
     "config_dir",

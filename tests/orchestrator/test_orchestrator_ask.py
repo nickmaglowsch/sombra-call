@@ -37,7 +37,6 @@ from sombra.orchestrator.ask import (
     MeetingNotFoundError,
     ask_trigger,
     claude_brain,
-    env_api_key,
     list_meetings,
     read_summary,
     resolve_meeting,
@@ -131,7 +130,7 @@ def root(tmp_path: Path) -> Path:
 
 @pytest.fixture
 def no_key(monkeypatch: pytest.MonkeyPatch) -> Iterator[None]:
-    monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)
+    monkeypatch.setattr(commands, "key_lookup", lambda provider: None)  # empty keychain
     yield
 
 
@@ -363,12 +362,14 @@ def test_resolve_model() -> None:
     assert resolve_model("claude-opus-5-5") == "claude-opus-5-5"
 
 
-def test_env_api_key(monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.setenv("ANTHROPIC_API_KEY", " sk-test ")
-    assert env_api_key() == "sk-test"
-    monkeypatch.setenv("ANTHROPIC_API_KEY", "")
-    with pytest.raises(ApiKeyMissingError, match="ANTHROPIC_API_KEY"):
-        env_api_key()
+def test_claude_brain_needs_a_keychain_key_not_the_environment(
+    root: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # #40: the key comes from the keychain; ANTHROPIC_API_KEY is no longer read.
+    monkeypatch.setenv("ANTHROPIC_API_KEY", "sk-env")
+    meeting = make_meeting(root, "Daily")
+    with pytest.raises(ApiKeyMissingError, match="sombra auth set anthropic"):
+        claude_brain(meeting, _cfg(root), frames=False)
 
 
 async def test_ask_rejects_an_empty_question(tmp_path: Path) -> None:
@@ -485,7 +486,7 @@ def test_command_without_api_key_exits_2(root: Path, tmp_path: Path, no_key: Non
     make_meeting(root, "Daily")
     err = io.StringIO()
     assert commands.run(_args("latest", "q?", _config(root, tmp_path)), err=err) == 2
-    assert "ANTHROPIC_API_KEY" in err.getvalue()
+    assert "sombra auth set anthropic" in err.getvalue()
 
 
 def test_command_writes_nothing_to_the_meeting(root: Path, tmp_path: Path) -> None:
@@ -521,11 +522,9 @@ def test_default_entry_point_uses_run(monkeypatch: pytest.MonkeyPatch) -> None:
     assert commands._ask(ns) == 7 and called == [ns]
 
 
-def test_claude_brain_uses_the_real_client_with_a_key(
-    root: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    monkeypatch.setenv("ANTHROPIC_API_KEY", "sk-test")
+def test_claude_brain_uses_the_real_client_with_a_key(root: Path) -> None:
     meeting = make_meeting(root, "Daily")
-    brain = claude_brain(meeting, _cfg(root), frames=False)  # builds only; no request is made
+    # builds only; no request is made
+    brain = claude_brain(meeting, _cfg(root), frames=False, api_key=lambda: "sk-test")
     assert brain.settings.model == "claude-sonnet-5-5"
     assert brain.settings.warm_on_start is False and brain.settings.cache_ttl == "5m"
