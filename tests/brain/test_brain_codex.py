@@ -1008,6 +1008,15 @@ def test_macos_seatbelt_denial_is_taken_from_the_log() -> None:
         (tool_log(calls=["exec_command"]), "tool 'exec_command' without an item"),
         # Denied, but the arguments and output aren't in the log.
         (denied_log(result=False), "tool 'exec_command' without a logged result"),
+        # Denied, but its result record can't be read.
+        (
+            denied_log().replace('arguments={"cmd"', 'arguments=not-json {"cmd"'),
+            "without a logged result",
+        ),
+        (
+            denied_log().replace('arguments={"cmd"', 'arguments={"cmd": 1, "x"'),
+            "without a logged result",
+        ),
         # Tools the request never offers.
         (tool_log(calls=["exec"]), "tool 'exec'"),
         (tool_log(calls=["apply_patch"]), "tool 'apply_patch'"),
@@ -1017,6 +1026,16 @@ def test_macos_seatbelt_denial_is_taken_from_the_log() -> None:
 async def test_tool_log_fails_closed(meeting: Path, stderr: str, forbidden: str) -> None:
     brain = await started(meeting, FakeCodex(ProcessResult(0, events("ok"), stderr)))
     with pytest.raises(BrainSandboxError, match=forbidden):
+        await brain.answer(BrainRequest(trigger()))
+
+
+async def test_answer_without_a_completed_turn_still_needs_the_log(meeting: Path) -> None:
+    """Review of #84: exit 0 with an answer but no ``turn.completed`` must not skip the check."""
+    stdout = json.dumps(
+        {"type": "item.completed", "item": {"id": "m", "type": "agent_message", "text": "oi"}}
+    )
+    brain = await started(meeting, FakeCodex(ProcessResult(0, stdout + "\n", "")))
+    with pytest.raises(BrainSandboxError, match="no codex tool-call log"):
         await brain.answer(BrainRequest(trigger()))
 
 

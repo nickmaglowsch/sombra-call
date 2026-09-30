@@ -162,7 +162,7 @@ Seatbelt denies with `Operation not permitted`, so on macOS **every** fast comma
 
 1. `CodexBrain` runs every `codex exec` with `RUST_LOG` = `TELEMETRY_LOG_FILTER` (Codex's default plus `codex_otel.trace_safe=info,codex_otel.log_only=info`). `RUST_LOG` is not on `PASSTHROUGH_ENV`, so the parent's value never replaces it.
 2. `parse_tool_log` reads those records and `reconcile_tool_calls` checks the run. Anything wrong goes to `CodexRun.forbidden`, which voids the answer with `BrainSandboxError`:
-   - a completed turn with no `trace_safe` record at all (the filter didn't take effect, so nothing is proven): `no codex tool-call log`;
+   - no `trace_safe` record at all in a run that produced anything (a completed turn, an answer or a command item). The filter didn't take effect, so nothing is proven: `no codex tool-call log`. A run that produced nothing reports its own error instead;
    - a call to any tool other than `exec_command` or `write_stdin`: `tool '<name>'`;
    - a denied `exec_command` without its `codex.tool_result`: `… without a logged result`. Otherwise its command and output (Codex's `Chunk ID … Output:` header cut) are added to `commands`/`outputs`;
    - fewer `command_execution` items than non-denied `exec_command` calls: `tool 'exec_command' without an item` (a hidden path we don't know);
@@ -177,6 +177,7 @@ Seatbelt denies with `Operation not permitted`, so on macOS **every** fast comma
 - The log format isn't a public interface. It is pinned by `MAX_TESTED_CLI_VERSION`: raising it requires the capture test, which now checks the log too (`test_forced_removed_tool_call_is_not_run`, both shell tests).
 - A `codex.tool_result` holds text the command printed, which the agent controls. A line in it can look like a record. Such a line can add a call, cut a result short, or add a second result for a call; each fails closed (`test_forged_record_in_command_output_only_fails_closed`). A call with more than one result record gets none. The one thing it can do is plant a fake ` mcp_server=` in its own output, which cuts short the audit copy of that denied command's output.
 - Items and calls are matched by count, not id: the JSONL renumbers items (`item_N`).
+- Input sent with `write_stdin` to a command that is still running counts as a call but isn't recorded in `commands`. The sandbox confines it like the command itself.
 - An `exec_command` whose arguments aren't valid JSON, or that fails before the orchestrator, emits no item. It voids the answer. That is rare, and it fails closed.
 - Stderr now carries each tool output. It stays in memory, is not logged by Sombra, and `CodexRun` keeps only what it kept before.
 

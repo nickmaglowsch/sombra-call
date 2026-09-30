@@ -677,7 +677,9 @@ def reconcile_tool_calls(run: CodexRun, log: ToolLog) -> None:
     without a logged call (the log didn't work) goes to :attr:`CodexRun.forbidden`.
     """
     if not log.present:
-        if run.completed:
+        # Anything the run could hand back (an answer, a command, a finished turn) needs
+        # the log; only a run that produced nothing may lack it, and its error wins.
+        if run.completed or run.text or run.command_items:
             run.forbidden.append("no codex tool-call log")
         return
     run.tool_calls = [name for _, name in log.calls]

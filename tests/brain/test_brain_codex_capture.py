@@ -13,8 +13,9 @@ raising that cap (ADR 0018).
 
 The shell tests force a real ``exec_command`` and check that it can read the meeting
 folder and nothing next to it or next to the codex binary (#63: on Linux every command
-used to fail in bwrap), and that the brain sees every command it ran (#74: on macOS a
-Seatbelt denial left no item in the JSONL).
+used to fail in bwrap), and that every ``exec_command`` shows up in ``commands`` (#74: on
+macOS a Seatbelt denial left no item in the JSONL). Input sent to a running command with
+``write_stdin`` is counted as a call but not recorded.
 
 A forced tool call also shows why the request is the control that matters: on
 0.159.1 a code-mode ``exec`` or a ``spawn_agent`` call leaves no item in the JSONL.
