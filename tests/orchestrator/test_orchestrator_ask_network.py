@@ -1,6 +1,7 @@
 """``sombra ask`` against the real API (``network``; never runs in CI).
 
-Run by hand, with a key in the environment::
+Run by hand, with a key in the environment (read by this test only; ``sombra ask`` itself
+reads the key from the OS keychain)::
 
     ANTHROPIC_API_KEY=... uv run pytest -m network -s \
         tests/orchestrator/test_orchestrator_ask_network.py
@@ -44,6 +45,10 @@ def meeting(tmp_path: Path) -> Path:
     return make_meeting(tmp_path / "meetings", "Daily time X")
 
 
+def _key() -> str:
+    return os.environ["ANTHROPIC_API_KEY"]
+
+
 def _cfg(meeting: Path) -> UserConfig:
     return UserConfig(meetings_root=meeting.parent, user=UserIdentity(name="Nick"))
 
@@ -52,7 +57,7 @@ def _cfg(meeting: Path) -> UserConfig:
 async def test_factual_questions_cite_real_timestamps(
     meeting: Path, question: str, facts: tuple[str, ...]
 ) -> None:
-    brain = claude_brain(meeting, _cfg(meeting), frames=False)
+    brain = claude_brain(meeting, _cfg(meeting), frames=False, api_key=_key)
     result = await ask(brain, meeting, question, frames=False, clock=local_now)
     text = result.response.text
     sys.stderr.write(
@@ -69,7 +74,7 @@ async def test_factual_questions_cite_real_timestamps(
 
 
 async def test_unanswerable_question_says_not_in_transcript(meeting: Path) -> None:
-    brain = claude_brain(meeting, _cfg(meeting), frames=False)
+    brain = claude_brain(meeting, _cfg(meeting), frames=False, api_key=_key)
     result = await ask(brain, meeting, UNANSWERABLE, frames=False, clock=local_now)
     text = result.response.text
     sys.stderr.write(f"\n{UNANSWERABLE}\n-> {text}\n({result.elapsed_s:.1f} s)\n")

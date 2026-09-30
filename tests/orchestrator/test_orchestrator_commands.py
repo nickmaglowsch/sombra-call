@@ -14,6 +14,8 @@ from test_orchestrator_replay import FIXTURE, fake_transcriber
 from sombra.cli import build_parser
 from sombra.contracts import AutonomyLevel
 from sombra.orchestrator import commands
+from sombra.orchestrator import replay as commands_replay
+from sombra.summary import AnthropicTextModel, ClaudeCliTextModel, CodexCliTextModel
 
 
 def parse(*argv: str) -> argparse.Namespace:
@@ -139,7 +141,9 @@ def test_start_runs_the_meeting_then_prints_the_report(tmp_path: Path) -> None:
     (plan,) = seen
     assert plan.meeting_dir == meeting and plan.level is AutonomyLevel.L1
     assert plan.window == "Zoom"
-    assert plan.api_key() == plan.agent_key() == "sk-anthropic"
+    assert plan.agent_key() == "sk-anthropic"
+    assert isinstance(plan.summary, AnthropicTextModel)
+    assert plan.summary.name == "claude-haiku-4-5"
     assert (meeting / "consent.json").is_file() and "Sombra" in notices[0]
     assert 'autonomy_level = "L1"' in (meeting / "meeting.toml").read_text()
     assert out.startswith(f"{meeting}\n")
@@ -159,7 +163,7 @@ def test_start_level_zero_runs_without_a_key(tmp_path: Path) -> None:
         runner=lambda plan, args: seen.append(plan),
     )
     assert code == 0 and "no summaries or minutes" in err
-    assert seen[0].api_key is None and seen[0].level is AutonomyLevel.L0
+    assert seen[0].summary is None and seen[0].level is AutonomyLevel.L0
 
 
 def test_start_with_codex_needs_no_anthropic_key(tmp_path: Path) -> None:
@@ -175,8 +179,67 @@ def test_start_with_codex_needs_no_anthropic_key(tmp_path: Path) -> None:
         confirm=lambda _: True,
         runner=lambda plan, args: seen.append(plan),
     )
-    assert code == 0 and "no summaries or minutes" in err
-    assert seen[0].api_key is None and seen[0].agent_key() == "sk-openai"
+    assert code == 0 and "summaries" not in err
+    assert seen[0].agent_key() == "sk-openai"
+    assert isinstance(seen[0].summary, CodexCliTextModel)  # summaries follow the agent
+
+
+@pytest.mark.parametrize(
+    ("brain", "keys", "agent_key", "summary"),
+    [
+        # a subscription never gets a key, even when one is stored
+        ('backend = "claude-code"', {"anthropic": "sk-a"}, None, ClaudeCliTextModel),
+        ('backend = "codex"\nauth = "subscription"', {"openai": "sk-o"}, None, CodexCliTextModel),
+        ('backend = "codex"\nauth = "api-key"', {"openai": "sk-o"}, "sk-o", CodexCliTextModel),
+        ('backend = "claude"', {"anthropic": "sk-a"}, "sk-a", AnthropicTextModel),
+    ],
+)
+def test_start_builds_the_configured_provider(
+    tmp_path: Path, brain: str, keys: dict[str, str], agent_key: str | None, summary: type
+) -> None:
+    cfg = write_config(tmp_path)
+    cfg.write_text(cfg.read_text().replace('backend = "claude"', brain))
+    seen: list[Any] = []
+    lookup = {k: (lambda v=v: v) for k, v in keys.items()}
+    code, _, err = run_start(
+        tmp_path,
+        "Daily",
+        "--config",
+        str(cfg),
+        keys=lookup.get,
+        confirm=lambda _: True,
+        runner=lambda plan, args: seen.append(plan),
+    )
+    assert code == 0, err
+    plan = seen[0]
+    assert (plan.agent_key() if plan.agent_key else None) == agent_key
+    assert isinstance(plan.summary, summary)
+
+
+def test_start_codex_api_key_mode_needs_the_key(tmp_path: Path) -> None:
+    cfg = write_config(tmp_path)
+    cfg.write_text(
+        cfg.read_text().replace('backend = "claude"', 'backend = "codex"\nauth = "api-key"')
+    )
+    code, _, err = run_start(tmp_path, "Daily", "--config", str(cfg), keys=lambda p: None)
+    assert code == 2 and "sombra auth set openai" in err
+    assert meetings(tmp_path) == []
+
+
+def test_start_summary_none(tmp_path: Path) -> None:
+    cfg = write_config(tmp_path)
+    cfg.write_text(cfg.read_text() + '[summary]\nbackend = "none"\n')
+    seen: list[Any] = []
+    code, _, err = run_start(
+        tmp_path,
+        "Daily",
+        "--config",
+        str(cfg),
+        confirm=lambda _: True,
+        runner=lambda plan, args: seen.append(plan),
+    )
+    assert code == 0 and "no rolling summaries or minutes" in err
+    assert seen[0].summary is None
 
 
 # --- replay ----------------------------------------------------------------------------
@@ -254,3 +317,49 @@ def test_replay_cli_end_to_end_with_fake_models(tmp_path: Path, monkeypatch: Any
     assert [e["type"] for e in events] == ["trigger", "suggestion", "action"]
     assert events[1]["frames_sent"] == ["f0001"]
     assert not (meeting / "summary.md").exists()  # fake brain: no API, no minutes
+
+
+@pytest.mark.parametrize(
+    ("brain", "agent_key", "summary"),
+    [
+        ('backend = "claude-code"', None, ClaudeCliTextModel),
+        ('backend = "codex"\nauth = "subscription"', None, CodexCliTextModel),
+        ('backend = "codex"\nauth = "api-key"', "sk-openai", CodexCliTextModel),
+        ('backend = "claude-api"', "sk-anthropic", AnthropicTextModel),
+    ],
+)
+def test_replay_builds_the_configured_provider(
+    tmp_path: Path, monkeypatch: Any, brain: str, agent_key: str | None, summary: type
+) -> None:
+    from sombra.orchestrator.replay import ScriptedBrain
+
+    monkeypatch.setattr(
+        "sombra.orchestrator.replay.build_transcriber", lambda *a, **k: fake_transcriber()
+    )
+    built: list[tuple[str, str | None]] = []
+
+    def fake_agent_brain(backend: str, api_key: Any, **kw: Any) -> ScriptedBrain:
+        built.append((backend, api_key() if api_key else None))
+        return ScriptedBrain()
+
+    summaries: list[Any] = []
+    real_run_replay = commands_replay.run_replay
+
+    async def spy(opts: Any, **kw: Any) -> Path:
+        summaries.append(kw["summary_model"])
+        return await real_run_replay(opts, **{**kw, "summary_model": None})
+
+    monkeypatch.setattr("sombra.orchestrator.replay.build_agent_brain", fake_agent_brain)
+    monkeypatch.setattr(commands_replay, "run_replay", spy)
+    cfg = write_config(tmp_path)
+    cfg.write_text(cfg.read_text().replace('backend = "claude"', brain))
+    out, err = io.StringIO(), io.StringIO()
+    args = parse(
+        "replay", ME, OTHERS, "--auto-approve", "--config", str(cfg), "--root", str(tmp_path / "m")
+    )
+    keys = lambda provider: lambda: f"sk-{provider}"  # noqa: E731
+    code = commands.run_replay_command(args, out=out, err=err, keys=keys)
+    assert code == 0, err.getvalue()
+    backend = brain.split('"')[1]
+    assert built == [(backend, agent_key)]
+    assert isinstance(summaries[0], summary)

@@ -7,10 +7,11 @@ the real one (pyobjc, ``keyring``, ``sounddevice`` imported lazily, never prompt
 
 Sections: ``sombra`` (versions, models, disk, keychain), ``macos`` (which app holds the
 TCC grants and whether the app's signature keeps them, the permissions, input device,
-system-audio route) or ``linux`` (live capture
-not built yet, ADR 0016), and ``agent`` (CLIs on PATH and API keys). The agent section
-is deliberately small and self-contained: the provider wizard (R4) replaces it with
-per-backend checks.
+system-audio route) or ``linux`` (live capture not built yet, ADR 0016), and ``agent``:
+the configured backend (``[brain]``) and summary backend (``[summary]``), each with what
+it needs: the CLI, its minimum version and its login (from the CLI's own status command,
+``config.providers``), or the API key in the keychain. ``--live`` adds one test question
+through the agent (``orchestrator.smoke``).
 
 This lives in ``config`` because it inspects several packages (``transcription``,
 ``privacy``, ``audio``) and ``config`` is a wiring package allowed to import them.
@@ -28,12 +29,28 @@ import shutil
 import subprocess
 import sys
 from collections.abc import Callable, Mapping
-from dataclasses import asdict, dataclass
+from dataclasses import asdict, dataclass, field
 from enum import StrEnum
 from pathlib import Path
 from typing import Any
 
 import sombra
+from sombra.config.providers import (
+    CliSpec,
+    CliState,
+    Login,
+    Needs,
+    ProcResult,
+    Runner,
+    agent_needs,
+    describe,
+    detect_cli,
+    login_state,
+    run_quiet,
+    summary_needs,
+    version_str,
+)
+from sombra.config.schema import DEFAULT_BACKEND, BrainConfig
 
 
 class Status(StrEnum):
@@ -86,7 +103,6 @@ MIN_MACOS = (14, 0)
 UBUNTU_VERSIONS = ("22.04", "24.04")
 DISK_FAIL_BYTES = 1 << 30  # 1 GiB: not enough for a meeting's frames
 DISK_WARN_BYTES = 5 << 30
-AGENT_CLIS = ("claude", "codex")
 AGENT_KEYS = ("anthropic", "openai")  # `sombra auth set <provider>`
 
 
@@ -120,6 +136,12 @@ class Probes:
     running_app: str = ""  # the Sombra.app this sombra runs from; "" for the uv install
     # That app's signature: "certificate:<name>", "adhoc", "unsigned", or "" (unknown).
     app_signature: str = ""
+    # The agent section: the configured provider, and the CLIs' --version / status.
+    brain: BrainConfig = field(default_factory=BrainConfig)
+    summary_backend: str | None = DEFAULT_BACKEND
+    run: Runner = lambda argv, env: ProcResult(127, "", "")
+    environ: Mapping[str, str] = field(default_factory=dict)
+    smoke: Callable[[], str] | None = None  # `doctor --live`: one answer, or raises
 
 
 # --- checks --------------------------------------------------------------------------
@@ -428,38 +450,113 @@ def check_linux(p: Probes) -> list[Check]:
     return out
 
 
-# Agent section: kept apart on purpose; R4 (`sombra setup`) replaces it.
-_CLI_FIX = {
-    "claude": "install Claude Code (https://claude.com/claude-code) and run `claude` once "
-    "to log in",
-    "codex": "install the Codex CLI (`npm i -g @openai/codex`) and run `codex login`",
-}
+# --- agent section ----------------------------------------------------------------------
+
+
+def _cli_checks(p: Probes, spec: CliSpec, agent: bool) -> tuple[list[Check], CliState | None]:
+    name = f"{spec.name} CLI"
+    state = detect_cli(spec, p.which, p.run, p.environ)
+    if state.path is None:
+        fix = f"install it: `{spec.install}`, then run `sombra setup`"
+        return [Check("agent", name, Status.FAIL, "not on PATH", fix)], None
+    problem = state.problem(spec, agent=agent)
+    if problem is not None:
+        detail = f"{problem} ({state.path})"
+        return [Check("agent", name, Status.FAIL, detail, f"`{spec.update}`")], None
+    version = version_str(state.version) if state.version else "?"
+    return [Check("agent", name, Status.OK, f"{version} ({state.path})")], state
+
+
+def _login_check(p: Probes, spec: CliSpec, path: str, want_subscription: bool) -> Check:
+    name = f"{spec.name} login"
+    state = login_state(spec, path, p.run, p.environ)
+    fix = f"`{spec.login_hint}`"
+    if state is Login.NONE:
+        return Check("agent", name, Status.FAIL, "not logged in", fix)
+    if state is Login.UNKNOWN:
+        return Check("agent", name, Status.WARN, "the CLI did not report a login state", fix)
+    if want_subscription and state is not Login.SUBSCRIPTION:
+        how = "an API key" if state is Login.API_KEY else "a non-subscription account"
+        return Check(
+            "agent",
+            name,
+            Status.WARN,
+            f"logged in with {how}: that account is billed, not your subscription",
+            f"log out and back in with your plan: `{spec.login_hint}`",
+        )
+    return Check("agent", name, Status.OK, f"logged in ({state.value})")
+
+
+def _key_check(p: Probes, provider: str, status: Status = Status.FAIL) -> Check:
+    name = f"{provider} API key"
+    try:
+        stored = p.has_key(provider)
+    except Exception:
+        return Check("agent", name, Status.WARN, "keychain unreachable", "see the keychain check")
+    if stored:
+        return Check("agent", name, Status.OK, "stored in the keychain")
+    return Check("agent", name, status, "not set", f"`sombra auth set {provider}`")
+
+
+def _needs_checks(p: Probes, needs: Needs, done: set[str]) -> list[Check]:
+    out: list[Check] = []
+    spec = needs.cli
+    state: CliState | None = None
+    if spec is not None:
+        if spec.name not in done:
+            cli, state = _cli_checks(p, spec, agent=needs.role == "agent")
+            out += cli
+            done.add(spec.name)
+        else:
+            state = detect_cli(spec, p.which, p.run, p.environ)
+            state = state if state.usable(spec, agent=needs.role == "agent") else None
+    path = state.path if state is not None else None
+    if spec is not None and needs.key_or_login and needs.key is not None:
+        key = _key_check(p, needs.key, Status.WARN)
+        if key.status is Status.OK or path is None:
+            return [*out, key]
+        login = _login_check(p, spec, path, want_subscription=False)
+        return [*out, key, login] if login.status is not Status.OK else [*out, login]
+    if spec is not None and path is not None and needs.login and f"{spec.name}:login" not in done:
+        out.append(_login_check(p, spec, path, want_subscription=needs.role == "agent"))
+        done.add(f"{spec.name}:login")
+    if needs.key is not None and f"key:{needs.key}" not in done:
+        out.append(_key_check(p, needs.key))
+        done.add(f"key:{needs.key}")
+    return out
 
 
 def check_agent(p: Probes) -> list[Check]:
-    out = []
-    for cli in AGENT_CLIS:
-        path = p.which(cli)
-        if path:
-            out.append(Check("agent", f"{cli} CLI", Status.OK, path))
-        else:
-            out.append(Check("agent", f"{cli} CLI", Status.WARN, "not on PATH", _CLI_FIX[cli]))
-    for provider in AGENT_KEYS:
-        name = f"{provider} API key"
-        try:
-            stored = p.has_key(provider)
-        except Exception:
-            out.append(
-                Check("agent", name, Status.WARN, "keychain unreachable", "see the keychain check")
+    out = [Check("agent", "backend", Status.OK, describe(p.brain), "change it: `sombra setup`")]
+    done: set[str] = set()
+    out += _needs_checks(p, agent_needs(p.brain), done)
+    s_needs = summary_needs(p.summary_backend)
+    if s_needs is None:
+        out.append(
+            Check(
+                "agent",
+                "summaries",
+                Status.WARN,
+                "none: no rolling summaries or minutes",
+                "set [summary] backend, or run `sombra setup`",
             )
-            continue
-        if stored:
-            out.append(Check("agent", name, Status.OK, "stored in the keychain"))
-        else:
-            out.append(
-                Check("agent", name, Status.WARN, "not set", f"`sombra auth set {provider}`")
-            )
+        )
+    else:
+        out.append(Check("agent", "summaries", Status.OK, s_needs.backend))
+        out += _needs_checks(p, s_needs, done)
+    if p.smoke is not None:
+        out.append(_smoke_check(p.smoke))
     return out
+
+
+def _smoke_check(smoke: Callable[[], str]) -> Check:
+    try:
+        answer = smoke()
+    except Exception as e:
+        detail = f"no answer ({type(e).__name__}): {e}"[:300]
+        return Check("agent", "live answer", Status.FAIL, detail, "fix the checks above")
+    first = (answer.strip().splitlines() or [""])[0][:80]
+    return Check("agent", "live answer", Status.OK, f"answered: {first}")
 
 
 def _guarded(
@@ -758,18 +855,25 @@ def _whisper_model_name(configured: str) -> str:
 
 
 def live_probes(
-    config_path: Path | None = None, models_dir: Path | None = None
+    config_path: Path | None = None, models_dir: Path | None = None, *, live: bool = False
 ) -> Probes:  # pragma: no cover - reads the real machine; checks are tested with fakes
     from sombra.config.loader import load_user_config
-    from sombra.config.schema import DEFAULT_MEETINGS_ROOT, ConfigError
+    from sombra.config.schema import DEFAULT_MEETINGS_ROOT, ConfigError, UserConfig
     from sombra.transcription.models import SILERO_VAD, default_models_dir, whisper_model
 
     try:
-        cfg = load_user_config(config_path)
-        data_dir = cfg.meetings_root
-        stt = cfg.models.stt
+        cfg: UserConfig | None = load_user_config(config_path)
     except ConfigError:
+        cfg = None
+    if cfg is not None:
+        data_dir, stt = cfg.meetings_root, cfg.models.stt
+    else:
         data_dir, stt = DEFAULT_MEETINGS_ROOT.expanduser(), ""
+    agent: dict[str, Any] = {}
+    if cfg is not None:
+        agent = {"brain": cfg.brain, "summary_backend": cfg.summary.resolve(cfg.brain)}
+        if live:
+            agent["smoke"] = lambda: _smoke(cfg)
     name = _whisper_model_name(stt)
     whisper = whisper_model(name)
     models = (
@@ -821,5 +925,15 @@ def live_probes(
         disk_free=lambda path: shutil.disk_usage(path).free,
         which=shutil.which,
         has_key=_has_key,
+        run=run_quiet,
+        environ=os.environ,
+        **agent,
         **extra,
     )
+
+
+def _smoke(cfg: Any) -> str:  # pragma: no cover - calls the real agent
+    from sombra.config.setup import SMOKE_QUESTION
+    from sombra.orchestrator.smoke import smoke_answer
+
+    return smoke_answer(cfg, SMOKE_QUESTION)

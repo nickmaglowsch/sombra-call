@@ -1,9 +1,10 @@
-"""``sombra new``, ``sombra profiles list``, ``sombra config init`` and ``sombra doctor``.
+"""``sombra new``, ``profiles list``, ``config init``, ``doctor`` and ``setup``.
 
 These live in ``config`` rather than ``store`` because they need both: ``config`` is
 a wiring package (see tests/test_architecture.py) and may import ``store``, while
 ``store`` may import only ``sombra.contracts``. ``doctor`` is here for the same reason:
 it inspects ``transcription``, ``privacy`` and ``audio`` (see ``config/doctor.py``).
+``setup`` (``config/setup.py``) is the agent-provider wizard (#47).
 """
 
 from __future__ import annotations
@@ -41,7 +42,10 @@ agent = "sonnet"                      # agent backend model alias
 summary = "haiku"                     # rolling summary / minutes model alias
 
 [brain]
-backend = "claude"                    # "claude" or "codex"
+backend = "claude-api"                # claude-code, claude-api or codex: run `sombra setup`
+
+[summary]
+backend = "follow"                    # the [brain] backend; or claude-code, claude-api, codex, none
 """
 
 
@@ -77,7 +81,44 @@ def register(subparsers: argparse._SubParsersAction[argparse.ArgumentParser]) ->
     doctor.add_argument(
         "--models-dir", type=Path, help="models folder (default: ~/.cache/sombra/models)"
     )
+    doctor.add_argument(
+        "--live", action="store_true", help="also ask the configured agent one question"
+    )
     doctor.set_defaults(func=_doctor)
+
+    setup = subparsers.add_parser(
+        "setup",
+        help="choose the agent: Claude or Codex, on a subscription or an API key",
+        description=(
+            "Pick the agent backend, check the CLI and its login (or the API key), "
+            "write config.toml keeping your comments, and ask one test question. "
+            "Sombra never sees a subscription token: logins run in the CLIs' own flows."
+        ),
+    )
+    setup.add_argument(
+        "--non-interactive",
+        action="store_true",
+        help="no prompts, installs or logins; needs --backend",
+    )
+    setup.add_argument(
+        "--backend", choices=("claude-code", "claude-api", "codex"), help="agent backend"
+    )
+    setup.add_argument(
+        "--auth",
+        choices=("subscription", "api-key"),
+        help="codex only: ChatGPT plan via `codex login` (default) or an OpenAI API key",
+    )
+    setup.add_argument(
+        "--summary-backend",
+        choices=("follow", "claude-code", "claude-api", "codex", "none"),
+        help="who writes summaries and minutes (default: follow the agent)",
+    )
+    setup.add_argument("--show", action="store_true", help="print the current provider and exit")
+    setup.add_argument("--no-smoke", action="store_true", help="skip the test question")
+    setup.add_argument(
+        "--config", type=Path, help="user config file (default: ~/.config/sombra/config.toml)"
+    )
+    setup.set_defaults(func=_setup)
 
 
 def _new(args: argparse.Namespace) -> int:
@@ -150,9 +191,20 @@ def _config_path(args: argparse.Namespace) -> int:
 def _doctor(args: argparse.Namespace) -> int:
     from sombra.config.doctor import exit_code, live_probes, render_json, render_text, run_checks
 
-    checks = run_checks(live_probes(args.config, args.models_dir))
+    checks = run_checks(live_probes(args.config, args.models_dir, live=args.live))
     if args.json:
         sys.stdout.write(json.dumps(render_json(checks), ensure_ascii=False, indent=2) + "\n")
     else:
         sys.stdout.write(render_text(checks))
     return exit_code(checks)
+
+
+def _setup(args: argparse.Namespace) -> int:
+    from sombra.config.setup import SetupError, SetupRequest, live_io, run_setup
+
+    try:
+        request = SetupRequest.from_args(args)
+    except SetupError as e:
+        sys.stderr.write(f"sombra setup: {e}\n")
+        return 2
+    return run_setup(request, live_io())

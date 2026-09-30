@@ -7,8 +7,9 @@ from dataclasses import replace
 from pathlib import Path
 
 import pytest
+from fake_clis import MASKED_KEY, Cli, FakeClis
 
-from sombra.config import doctor
+from sombra.config import BrainConfig, doctor
 from sombra.config.doctor import (
     Check,
     ModelSpec,
@@ -228,21 +229,170 @@ def test_unsupported_platform_fails(tmp_path: Path) -> None:
     assert _by_name(checks)["platform"].status is Status.FAIL
 
 
-def test_agent_section_reports_clis_and_keys(tmp_path: Path) -> None:
+def _agent(p: Probes) -> list[tuple[str, Status]]:
+    return [(c.name, c.status) for c in run_checks(p) if c.section == "agent"]
+
+
+def _agent_checks(p: Probes) -> dict[str, Check]:
+    return {c.name: c for c in run_checks(p) if c.section == "agent"}
+
+
+def test_agent_default_is_the_api_with_a_keychain_key(tmp_path: Path) -> None:
+    p = _probes(tmp_path, has_key=lambda provider: provider == "anthropic")
+    assert _agent(p) == [
+        ("backend", Status.OK),
+        ("anthropic API key", Status.OK),
+        ("summaries", Status.OK),  # follows the agent: the same key, checked once
+    ]
+
+
+def test_agent_api_backend_without_a_key_fails(tmp_path: Path) -> None:
+    checks = run_checks(_probes(tmp_path, has_key=lambda provider: False))
+    key = _by_name(checks)["anthropic API key"]
+    assert key.status is Status.FAIL and key.fix == "`sombra auth set anthropic`"
+    assert exit_code(checks) == 1
+
+
+def test_agent_claude_code_checks_cli_version_and_login(tmp_path: Path) -> None:
+    clis = FakeClis(codex=None)
     p = _probes(
         tmp_path,
-        which=lambda name: "/opt/bin/claude" if name == "claude" else None,
+        brain=BrainConfig("claude-code"),
+        summary_backend="claude-code",
+        which=clis.which,
+        run=clis.run,
+        has_key=lambda provider: False,
+        environ={"PATH": "/opt/bin", "HOME": "/home/u", "ANTHROPIC_API_KEY": "sk-shell"},
+    )
+    assert _agent(p) == [
+        ("backend", Status.OK),
+        ("claude CLI", Status.OK),
+        ("claude login", Status.OK),
+        ("summaries", Status.OK),
+    ]
+    # The status command sees what a meeting will: the CLI's own login, never a key.
+    for _argv, env in clis.calls:
+        assert "ANTHROPIC_API_KEY" not in env and env["HOME"] == "/home/u"
+    assert ["/opt/bin/claude", "auth", "status", "--json"] in [a for a, _ in clis.calls]
+
+
+@pytest.mark.parametrize(
+    ("claude", "name", "status", "fragment"),
+    [
+        (None, "claude CLI", Status.FAIL, "curl -fsSL https://claude.ai/install.sh | bash"),
+        (Cli("2.1.200"), "claude CLI", Status.FAIL, "`claude update`"),
+        (Cli("garbled"), "claude CLI", Status.FAIL, "`claude update`"),
+        (Cli("2.1.300", "none"), "claude login", Status.FAIL, "claude auth login"),
+        (Cli("2.1.285", "api-key"), "claude login", Status.WARN, "log out and back in"),
+        (Cli("2.1.285", "garbage"), "claude login", Status.WARN, "claude auth login"),
+    ],
+)
+def test_agent_claude_code_problems(
+    tmp_path: Path, claude: Cli | None, name: str, status: Status, fragment: str
+) -> None:
+    clis = FakeClis(claude=claude, codex=None)
+    p = _probes(tmp_path, brain=BrainConfig("claude-code"), which=clis.which, run=clis.run)
+    check = _agent_checks(p)[name]
+    assert check.status is status and fragment in check.fix
+
+
+def test_agent_codex_subscription_never_echoes_the_status_output(tmp_path: Path) -> None:
+    clis = FakeClis(codex=Cli("0.159.1", "api-key"))
+    p = _probes(
+        tmp_path,
+        brain=BrainConfig("codex", "subscription"),
+        summary_backend="codex",
+        which=clis.which,
+        run=clis.run,
+    )
+    checks = _agent_checks(p)
+    assert checks["codex login"].status is Status.WARN  # billed to the API, not ChatGPT
+    assert "openai API key" not in checks  # a subscription never looks at the key
+    assert MASKED_KEY not in render_text(run_checks(p))
+
+
+def test_codex_newer_than_verified_fails_for_the_agent_only(tmp_path: Path) -> None:
+    clis = FakeClis(codex=Cli("0.160.0"))
+    agent = _agent_checks(
+        _probes(
+            tmp_path, brain=BrainConfig("codex", "subscription"), which=clis.which, run=clis.run
+        )
+    )
+    assert agent["codex CLI"].status is Status.FAIL
+    assert "newer than 0.159.1" in agent["codex CLI"].detail
+    assert agent["codex CLI"].fix == "`npm install -g @openai/codex@0.159.1`"
+    summaries_only = _agent_checks(
+        _probes(
+            tmp_path,
+            brain=BrainConfig("claude-code"),
+            summary_backend="codex",
+            which=clis.which,
+            run=clis.run,
+        )
+    )
+    assert summaries_only["codex CLI"].status is Status.OK  # the text model has no cap
+
+
+def test_agent_codex_api_key_summaries_need_the_login(tmp_path: Path) -> None:
+    clis = FakeClis(codex=Cli("0.159.1", "none"))
+    p = _probes(
+        tmp_path,
+        brain=BrainConfig("codex", "api-key"),
+        summary_backend="codex",
+        which=clis.which,
+        run=clis.run,
         has_key=lambda provider: provider == "openai",
     )
-    agent = [c for c in run_checks(p) if c.section == "agent"]
-    assert [(c.name, c.status) for c in agent] == [
-        ("claude CLI", Status.OK),
-        ("codex CLI", Status.WARN),
-        ("anthropic API key", Status.WARN),
+    assert _agent(p) == [
+        ("backend", Status.OK),
+        ("codex CLI", Status.OK),
         ("openai API key", Status.OK),
+        ("summaries", Status.OK),
+        ("codex login", Status.FAIL),  # summaries run on the CLI login only (ADR 0046)
     ]
-    assert agent[1].fix == "install the Codex CLI (`npm i -g @openai/codex`) and run `codex login`"
-    assert agent[2].fix == "`sombra auth set anthropic`"
+
+
+@pytest.mark.parametrize(
+    ("key", "login", "expected"),
+    [
+        (True, "none", [("openai API key", Status.OK)]),
+        (False, "subscription", [("codex login", Status.OK)]),
+        (False, "none", [("openai API key", Status.WARN), ("codex login", Status.FAIL)]),
+    ],
+)
+def test_agent_codex_without_auth_takes_a_key_or_the_login(
+    tmp_path: Path, key: bool, login: str, expected: list[tuple[str, Status]]
+) -> None:
+    clis = FakeClis(codex=Cli("0.159.1", login))
+    p = _probes(
+        tmp_path,
+        brain=BrainConfig("codex"),
+        summary_backend=None,
+        which=clis.which,
+        run=clis.run,
+        has_key=lambda provider: key,
+    )
+    assert _agent(p)[2:-1] == expected
+    assert _agent(p)[-1] == ("summaries", Status.WARN)  # none: no minutes
+
+
+def test_agent_keychain_unreachable_is_a_warning(tmp_path: Path) -> None:
+    def broken(provider: str) -> bool:
+        raise RuntimeError("locked")
+
+    checks = _agent_checks(_probes(tmp_path, has_key=broken))
+    assert checks["anthropic API key"].status is Status.WARN
+
+
+def test_agent_live_answer(tmp_path: Path) -> None:
+    ok = _agent_checks(_probes(tmp_path, smoke=lambda: "pronto\n"))
+    assert ok["live answer"].status is Status.OK and "pronto" in ok["live answer"].detail
+
+    def fails() -> str:
+        raise RuntimeError("Claude Code is not logged in")
+
+    bad = _agent_checks(_probes(tmp_path, smoke=fails))["live answer"]
+    assert bad.status is Status.FAIL and "not logged in" in bad.detail
 
 
 def test_render_text_and_json(tmp_path: Path) -> None:
@@ -303,7 +453,7 @@ def test_doctor_command_exit_code_and_json(
     from sombra.cli import main
 
     probes = _probes(tmp_path, mic_permission=lambda: Permission.DENIED)
-    monkeypatch.setattr(doctor, "live_probes", lambda config, models_dir: probes)
+    monkeypatch.setattr(doctor, "live_probes", lambda config, models_dir, live: probes)
     assert main(["doctor", "--json"]) == 1
     data = json.loads(capsys.readouterr().out)
     assert data["ok"] is False
@@ -311,7 +461,7 @@ def test_doctor_command_exit_code_and_json(
     assert "[FAIL] microphone" in capsys.readouterr().out
 
     ok = _probes(tmp_path)
-    monkeypatch.setattr(doctor, "live_probes", lambda config, models_dir: ok)
+    monkeypatch.setattr(doctor, "live_probes", lambda config, models_dir, live: ok)
     assert main(["doctor"]) == 0
 
 

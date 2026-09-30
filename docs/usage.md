@@ -10,7 +10,7 @@ Requirements: [uv](https://docs.astral.sh/uv/) and the Xcode command-line tools.
 git clone https://github.com/nickmaglowsch/sombra-call && cd sombra-call
 uv sync --extra window                                  # --extra window: the always-on-top overlay (pywebview)
 uv run python scripts/download_models.py                # whisper large-v3-turbo (~570 MB) + Silero VAD
-uv run sombra auth set anthropic                        # Claude API key → macOS Keychain (never a file)
+uv run sombra setup                                     # the agent: Claude or Codex, subscription or API key
 ```
 
 Then write `~/.config/sombra/config.toml`. At least tell Sombra your name, so it knows when you're called (every key is in [config.md](config.md)):
@@ -25,7 +25,7 @@ aliases = ["Mari"]        # other names people call you; they also go in Whisper
 
 ## Permissions (macOS)
 
-Grant these to the app you run `sombra` from (Terminal, iTerm, VS Code…) in **System Settings → Privacy & Security**. Restart that app after granting.
+With the default install (`Sombra.app`), macOS asks for these **for Sombra** the first time they are needed, and lists Sombra in **System Settings → Privacy & Security**. The grants stay across upgrades ([ADR 0050](adr/0050-macos-app-bundle.md)). With the uv install (`install.sh --no-app`), grant them to the app you run `sombra` from (Terminal, iTerm, VS Code…) and restart that app after granting. `sombra doctor` names the app that holds them ("permissions holder").
 
 | Permission | Why |
 | --- | --- |
@@ -67,7 +67,7 @@ When someone asks you something ("Mariana, o que você acha desse gráfico?"), t
 
 `--level` overrides `autonomy_level` from the config for one meeting.
 
-The agent that answers is `brain.backend` in the config: `claude` (default; needs the Anthropic key) or `codex` (the Codex CLI; uses `sombra auth set openai` or an existing `codex login`). The Codex backend only runs on a Codex CLI version whose tool set was verified, currently 0.159.1 (`npm i -g @openai/codex@0.159.1`). A newer or older CLI is refused with a message saying so ([ADR 0018](adr/0018-codex-backend.md)). Summaries and minutes always use Claude, so without an Anthropic key they are skipped ([config.md](config.md#agent-backend)).
+The agent that answers is `brain.backend` in the config, set by `sombra setup`: `claude-code` (your Claude Pro/Max plan through the Claude Code CLI), `claude-api` (the Anthropic key from the keychain) or `codex` (the Codex CLI, on `codex login` or an OpenAI key). The Codex agent only runs on a Codex CLI version whose tool set was verified, currently 0.159.1 (`npm i -g @openai/codex@0.159.1`); a newer or older CLI is refused with a message saying so, and `sombra setup` / `sombra doctor` say it first ([ADR 0018](adr/0018-codex-backend.md)). Summaries and minutes follow the agent unless `[summary] backend` says otherwise ([providers.md](providers.md)).
 
 ## Pause
 
@@ -122,6 +122,7 @@ The CI end-to-end test (`tests/e2e/test_e2e_replay.py`) is exactly this, on a sy
 ## Troubleshooting
 
 - **`model … not found`**: run `uv run python scripts/download_models.py` (add `tiny` for replays with `--stt-model tiny`).
-- **`no API key`**: run `uv run sombra auth set anthropic`, or record at `--level L0`.
+- **`needs the … API key`**: run `uv run sombra setup` (or `sombra auth set anthropic` / `openai`), or record at `--level L0`.
+- **`… is not logged in`**: log the CLI in again (`claude auth login` / `codex login`); `sombra doctor` shows the login state.
 - **No `OUTROS` lines**: the call audio isn't reaching Sombra. Check the Screen & System Audio Recording permission, or the BlackHole routing on older macOS.
 - **Screenshots missing for one app**: it may be on the blocked list (password managers, mail, banks; see [privacy.md](privacy.md#blocked-apps)).

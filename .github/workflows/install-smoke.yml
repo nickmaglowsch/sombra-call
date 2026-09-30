@@ -74,7 +74,8 @@ jobs:
       - name: sombra doctor --json
         run: |
           set -u
-          # Exit 1 is expected here: --no-models leaves the models missing (a FAIL).
+          # Exit 1 is expected here: --no-models leaves the models missing (a FAIL), and
+          # the runner has no agent set up (no `sombra setup`: no CLI login, no key).
           sombra doctor --json > doctor.json && code=0 || code=$?
           cat doctor.json
           test "$code" -le 1
@@ -85,7 +86,9 @@ jobs:
           assert names["sombra"]["status"] == "ok", names["sombra"]
           assert names["python"]["detail"].startswith("Python 3.12"), names["python"]
           fails = [c for c in data["checks"] if c["status"] == "fail"]
-          unexpected = [c for c in fails if not c["name"].startswith("model ")]
+          expected = lambda c: c["name"].startswith("model ") or c["section"] == "agent"
+          unexpected = [c for c in fails if not expected(c)]
+          assert names["backend"]["section"] == "agent", names["backend"]
           assert not unexpected, unexpected
           crashed = [c for c in data["checks"] if c["detail"].startswith("could not check")]
           assert not crashed, crashed

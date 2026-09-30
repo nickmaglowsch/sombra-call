@@ -10,6 +10,7 @@ from sombra.config import (
     ConfigError,
     ModelsConfig,
     RetentionConfig,
+    SummaryConfig,
     UserConfig,
     UserIdentity,
     config_dir,
@@ -113,7 +114,8 @@ def test_partial_config_keeps_other_defaults(tmp_path: Path) -> None:
     cfg = load_user_config(path)
     assert cfg.user.all_aliases == ("Ana",)
     assert cfg.retention == RetentionConfig()
-    assert cfg.brain == BrainConfig(backend="claude")
+    assert cfg.brain == BrainConfig(backend="claude-api")
+    assert cfg.summary == SummaryConfig("follow")
     assert cfg.meetings_root == Path("~/Sombra/meetings").expanduser()
 
 
@@ -132,7 +134,19 @@ def test_partial_config_keeps_other_defaults(tmp_path: Path) -> None:
         ('user = "Nick"\n', "user", "a table"),
         ('[audio]\nmicrophone = "x"\n', "audio.microphone", "unknown key"),
         ("colour = 1\n", "colour", "unknown key"),
-        ('[brain]\nbackend = "gpt"\n', "brain.backend", "one of claude, codex"),
+        ('[brain]\nbackend = "gpt"\n', "brain.backend", "one of claude-code, claude-api, codex"),
+        (
+            '[brain]\nbackend = "claude-code"\nauth = "api-key"\n',
+            "brain.auth",
+            "must be 'subscription' for claude-code",
+        ),
+        (
+            '[brain]\nbackend = "codex"\nauth = "login"\n',
+            "brain.auth",
+            "must be 'subscription' or 'api-key' for codex",
+        ),
+        ('[summary]\nbackend = "gpt"\n', "summary.backend", "follow, claude-code"),
+        ('[summary]\nmodel = "x"\n', "summary.model", "unknown key"),
         ("[brain]\nbackend = 1\n", "brain.backend", "a string"),
         ('[brain]\nmodel = "x"\n', "brain.model", "unknown key"),
     ],
@@ -278,3 +292,33 @@ def test_secret_in_array_of_tables_points_to_sombra_auth(tmp_path: Path) -> None
     with pytest.raises(ConfigError, match="sombra auth") as exc:
         load_user_config(path)
     assert exc.value.key == "providers[1].api_key"
+
+
+@pytest.mark.parametrize(
+    ("body", "brain", "summary"),
+    [
+        # "claude" is the pre-#47 name of claude-api, in [brain] and [summary] alike
+        ('[brain]\nbackend = "claude"\n', BrainConfig("claude-api"), "claude-api"),
+        ('[brain]\nbackend = "claude-code"\n', BrainConfig("claude-code"), "claude-code"),
+        (
+            '[brain]\nbackend = "codex"\nauth = "api-key"\n[summary]\nbackend = "claude"\n',
+            BrainConfig("codex", "api-key"),
+            "claude-api",
+        ),
+        ('[brain]\nbackend = "codex"\n[summary]\nbackend = "none"\n', BrainConfig("codex"), None),
+    ],
+)
+def test_brain_and_summary_backends(
+    tmp_path: Path, body: str, brain: BrainConfig, summary: str | None
+) -> None:
+    cfg = load_user_config(_write(tmp_path / "c.toml", body))
+    assert cfg.brain == brain
+    assert cfg.summary.resolve(cfg.brain) == summary
+
+
+def test_auth_mode_per_backend() -> None:
+    assert BrainConfig("claude-code").uses_api_key is False
+    assert BrainConfig("claude-api").uses_api_key is True
+    assert BrainConfig("codex").uses_api_key is None  # key if stored, else `codex login`
+    assert BrainConfig("codex", "subscription").uses_api_key is False
+    assert BrainConfig("codex", "api-key").uses_api_key is True

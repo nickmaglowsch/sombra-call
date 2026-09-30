@@ -7,6 +7,12 @@ post-meeting prompt variant (``brain.prompt.post_meeting_system_prompt``) and re
 the answer. The agent greps and reads ``transcript.md``, ``summary.md``, ``context/``
 and, with ``--frames``, looks at screenshots by their ``TELA`` id.
 
+The agent is the one ``[brain] backend`` names (#47): Claude over the API with the key
+from the OS keychain, the Claude Code CLI on the user's subscription, or the Codex CLI.
+Without ``--frames`` no screenshot may leave the machine. The API backend enforces
+that with :class:`FrameGate`; the CLI backends read files themselves, so they run on
+:class:`FramelessView`, a private copy of the folder without ``frames/``.
+
 Nothing is written to the meeting folder, ``log.jsonl`` included. The existing event
 types describe live triggers: logging a question asked hours later as a
 ``trigger``/``suggestion`` would count as a live answer in ``sombra report`` and
@@ -16,8 +22,10 @@ metric. Logging Q&A needs its own event type (a contract change, proposed on #20
 
 from __future__ import annotations
 
+import asyncio
 import dataclasses
-import os
+import shutil
+import tempfile
 import time
 import tomllib
 import uuid
@@ -37,7 +45,9 @@ from sombra.brain.claude import (
     ModelReply,
     PromptKit,
 )
-from sombra.config import UserConfig
+from sombra.brain.claude_code import ClaudeCodeBrain, ClaudeCodeRunner, ClaudeCodeSettings
+from sombra.brain.codex import CodexBrain, CodexRunner, CodexSettings
+from sombra.config import BrainConfig, UserConfig
 from sombra.contracts import AutonomyLevel, Brain, BrainRequest, BrainResponse, TriggerEvent
 from sombra.store import read_started_at, slugify
 from sombra.store.meeting import MEETING_FILE, TRANSCRIPT_FILE
@@ -45,7 +55,7 @@ from sombra.store.meeting import MEETING_FILE, TRANSCRIPT_FILE
 LATEST = "latest"
 SUMMARY_FILE = "summary.md"
 MAX_INLINE_SUMMARY_BYTES = 20_000  # bigger summaries stay on disk; the agent reads them
-API_KEY_ENV = "ANTHROPIC_API_KEY"
+ASK_TIMEOUT_S = 120.0  # nobody is waiting in a call; grepping a meeting takes a few rounds
 
 MODEL_ALIASES = {
     "opus": "claude-opus-5-5",
@@ -236,18 +246,6 @@ def resolve_model(name: str) -> str:
     return MODEL_ALIASES.get(name.casefold(), name)
 
 
-def env_api_key() -> str:
-    """The Anthropic API key from ``ANTHROPIC_API_KEY``.
-
-    Stopgap until ``sombra auth`` (privacy module) stores it in the OS keychain; the
-    key is read from the process environment only, never from a file, and never logged.
-    """
-    key = os.environ.get(API_KEY_ENV, "").strip()
-    if not key:
-        raise ApiKeyMissingError(f"set {API_KEY_ENV} to use `sombra ask`")
-    return key
-
-
 def claude_brain(
     meeting_dir: Path,
     cfg: UserConfig,
@@ -255,12 +253,14 @@ def claude_brain(
     frames: bool,
     model: str | None = None,
     client: ModelClient | None = None,
+    api_key: Callable[[], str] | None = None,
 ) -> ClaudeBrain:
     """A :class:`ClaudeBrain` set up for one post-meeting question.
 
     Longer deadline and more tool rounds than a live answer (nobody is waiting in a
     call, and grepping a whole meeting can take a few rounds); no cache warm-up and
-    the 5-minute cache TTL, since it is a single question.
+    the 5-minute cache TTL, since it is a single question. ``api_key`` is the keychain
+    lookup (``sombra auth set anthropic``); ``client`` replaces it in tests.
     """
     settings = ClaudeSettings(
         user_name=cfg.user.name or "o usuário",
@@ -269,17 +269,146 @@ def claude_brain(
         model=resolve_model(model or cfg.models.agent),
         max_tokens=2048,
         effort=None,
-        timeout_s=120.0,
+        timeout_s=ASK_TIMEOUT_S,
         max_tool_rounds=8,
         cache_ttl="5m",
         warm_on_start=False,
     )
     if client is None:
-        key = env_api_key()  # fail before starting anything when there is no key
-        client = AnthropicClient(lambda: key)
+        if api_key is None:  # fail before starting anything when there is no key
+            raise ApiKeyMissingError(
+                "no anthropic API key: run `sombra auth set anthropic` (or `sombra setup`)"
+            )
+        client = AnthropicClient(api_key)
     return ClaudeBrain(
         settings, FrameGate(client, frames=frames), ask_prompt_kit(meeting_dir, frames=frames)
     )
+
+
+def claude_code_brain(
+    meeting_dir: Path,
+    cfg: UserConfig,
+    *,
+    frames: bool,
+    model: str | None = None,
+    runner: ClaudeCodeRunner | None = None,
+) -> ClaudeCodeBrain:
+    """:class:`ClaudeCodeBrain` for one question, on the user's Claude subscription."""
+    settings = ClaudeCodeSettings(
+        user_name=cfg.user.name or "o usuário",
+        aliases=cfg.user.aliases,
+        level=AutonomyLevel.L1,  # unused by the post-meeting prompt
+        model=model,
+        effort=None,
+        timeout_s=ASK_TIMEOUT_S,
+        max_turns=10,
+    )
+    return ClaudeCodeBrain(settings, runner, ask_prompt_kit(meeting_dir, frames=frames))
+
+
+def codex_brain(
+    meeting_dir: Path,
+    cfg: UserConfig,
+    *,
+    frames: bool,
+    model: str | None = None,
+    api_key: Callable[[], str] | None = None,
+    runner: CodexRunner | None = None,
+) -> CodexBrain:
+    """:class:`CodexBrain` for one question; ``api_key=None`` uses ``codex login``."""
+    settings = CodexSettings(
+        user_name=cfg.user.name or "o usuário",
+        aliases=cfg.user.aliases,
+        level=AutonomyLevel.L1,
+        model=model,
+        reasoning_effort=None,
+        timeout_s=ASK_TIMEOUT_S,
+    )
+    kit = ask_prompt_kit(meeting_dir, frames=frames)
+    return CodexBrain(settings, runner, kit, api_key=api_key)
+
+
+class FramelessView:
+    """A CLI :class:`Brain` started on a private copy of the meeting without ``frames/``.
+
+    ``sombra ask`` without ``--frames`` promises that no screenshot leaves the machine.
+    The CLI agents read files with their own tools (Claude Code's ``Read`` returns
+    images; Codex's shell can dump bytes), so the only sure way is not to give them the
+    frames at all. The copy lives in a 0700 temp folder for one question and is removed
+    by :meth:`close`; symlinks are copied as links, which the CLIs refuse to follow out.
+    """
+
+    def __init__(self, inner: Brain) -> None:
+        self.inner = inner
+        self.backend = getattr(inner, "backend", "unknown")
+        self._tmp: tempfile.TemporaryDirectory[str] | None = None
+
+    async def start(self, meeting_dir: Path) -> None:
+        self._tmp = tempfile.TemporaryDirectory(prefix="sombra-ask-")
+        view = Path(self._tmp.name) / Path(meeting_dir).name
+        ignore = _top_level_frames(meeting_dir)
+        await asyncio.to_thread(shutil.copytree, meeting_dir, view, symlinks=True, ignore=ignore)
+        await self.inner.start(view)
+
+    async def answer(self, request: BrainRequest) -> BrainResponse:
+        return await self.inner.answer(request)
+
+    async def close(self) -> None:
+        try:
+            await self.inner.close()
+        finally:
+            if self._tmp is not None:
+                self._tmp.cleanup()
+                self._tmp = None
+
+
+def _top_level_frames(root: Path) -> Callable[[str, list[str]], set[str]]:
+    top = str(Path(root))
+
+    def ignore(directory: str, names: list[str]) -> set[str]:
+        return {"frames"} & set(names) if str(Path(directory)) == top else set()
+
+    return ignore
+
+
+Keys = Callable[[str], Callable[[], str] | None]
+
+
+def ask_brain(
+    meeting_dir: Path,
+    cfg: UserConfig,
+    *,
+    frames: bool,
+    keys: Keys,
+    model: str | None = None,
+) -> Brain:
+    """The configured backend (``[brain]``), set up for one post-meeting question.
+
+    ``model`` (``--model``) overrides ``[models] agent``. Keys come from ``keys`` (the OS
+    keychain); a CLI on its own login gets none. Raises :class:`ApiKeyMissingError` when
+    the backend is paid with a key and none is stored.
+    """
+    from sombra.orchestrator.wiring import backend_model, key_provider
+
+    brain_cfg: BrainConfig = cfg.brain
+    backend = brain_cfg.backend
+    name = backend_model(backend, model or cfg.models.agent)
+    if backend == "claude-api":
+        return claude_brain(
+            meeting_dir, cfg, frames=frames, model=model, api_key=keys(key_provider(backend))
+        )
+    if backend == "claude-code":
+        brain: Brain = claude_code_brain(meeting_dir, cfg, frames=frames, model=name)
+    else:
+        key = None
+        if brain_cfg.uses_api_key is not False:
+            key = keys(key_provider(backend))
+            if key is None and brain_cfg.uses_api_key:
+                raise ApiKeyMissingError(
+                    "no openai API key: run `sombra auth set openai` (or `sombra setup`)"
+                )
+        brain = codex_brain(meeting_dir, cfg, frames=frames, model=name, api_key=key)
+    return brain if frames else FramelessView(brain)
 
 
 # --- running one question ------------------------------------------------------------
