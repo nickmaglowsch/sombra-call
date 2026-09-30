@@ -31,6 +31,11 @@ Every answer is one ``codex exec --json`` process:
   :data:`ALLOWED_EVENTS` / :data:`ALLOWED_ITEMS` voids the answer. It is not the
   enforcement: on 0.159.1 a code-mode ``exec`` or ``spawn_agent`` call emits no item
   at all, which is why those tools are removed from the request instead.
+* **Tool-call log (#74).** The JSONL also misses a shell command that Codex judges
+  sandbox-denied (every Seatbelt denial on macOS). So each run also logs Codex's own
+  ``codex_otel`` tool-call events to stderr (:data:`TELEMETRY_LOG_FILTER`), and
+  :func:`reconcile_tool_calls` checks every call the model made against the items:
+  a tool other than the shell, or a shell call nothing accounts for, voids the answer.
 * **No history.** ``--ephemeral`` writes no session file and every answer is a new
   process, so a frame reaches exactly one request (C6) and is never persisted
   outside ``frames/``.
@@ -118,6 +123,20 @@ ALLOWED_EVENTS = frozenset(
     }
 )
 ALLOWED_ITEMS = frozenset({"agent_message", "reasoning", "command_execution", "error"})
+
+# The tools the request offers (decision 7 of ADR 0018). A logged call to any other
+# tool voids the answer, even though Codex answers it with "unsupported call".
+SHELL_TOOLS = frozenset({"exec_command", "write_stdin"})
+# ``RUST_LOG`` for every ``codex exec`` run (#74). It changes only what Codex prints on
+# stderr: its default (``error`` and the OpenTelemetry exporters off) plus the
+# ``codex_otel`` events at info. ``trace_safe`` names every tool call the model made
+# (``codex.tool_call_received``) and each sandbox outcome; ``log_only`` has each call's
+# arguments and the output the model got (``codex.tool_result``). Prompts show as
+# ``[REDACTED]``. Pinned: the parent's ``RUST_LOG`` is never passed through.
+TELEMETRY_LOG_FILTER = (
+    "error,opentelemetry_sdk=off,opentelemetry_otlp=off,"
+    "codex_otel.trace_safe=info,codex_otel.log_only=info"
+)
 
 # Model-catalog fields that add tools on codex-cli 0.159.1 and the value that removes
 # them. ``tool_mode = "code_mode_only"`` swaps the shell for a JavaScript ``exec`` tool;
@@ -471,6 +490,9 @@ class CodexRun:
     warnings: list[str] = field(default_factory=list)  # ``error`` items (non-fatal)
     errors: list[str] = field(default_factory=list)
     completed: bool = False
+    tool_calls: list[str] = field(default_factory=list)  # every tool the model called (log)
+    command_items: int = 0  # distinct ``command_execution`` items in the JSONL
+    _command_index: dict[str, int] = field(default_factory=dict, repr=False)
 
 
 def usage_from_codex(raw: Mapping[str, Any]) -> Usage:
@@ -510,7 +532,8 @@ def parse_events(stdout: str) -> CodexRun:
         if kind not in ALLOWED_EVENTS:
             run.forbidden.append(f"event {kind!r}")
         elif kind in ("item.started", "item.updated"):
-            _check_item(run, event.get("item"))
+            if _check_item(run, event.get("item")):
+                _item(run, event["item"], done=False)
         elif kind == "turn.completed":
             run.completed = True
             run.usage = _add(run.usage, usage_from_codex(event.get("usage") or {}))
@@ -532,15 +555,169 @@ def _check_item(run: CodexRun, item: object) -> bool:
     return False
 
 
-def _item(run: CodexRun, item: dict[str, Any]) -> None:
+def _item(run: CodexRun, item: dict[str, Any], *, done: bool = True) -> None:
     kind = item.get("type")
-    if kind == "agent_message":
+    if kind == "command_execution":
+        # One entry per item id: a command still running when Codex exits has only
+        # ``item.started`` (#74), and it counts as much as a completed one.
+        command = str(item.get("command", ""))
+        output = str(item.get("aggregated_output") or "")
+        key = item.get("id")
+        index = run._command_index.get(key) if isinstance(key, str) else None
+        if index is None:
+            run.commands.append(command)
+            run.outputs.append(output)
+            run.command_items += 1
+            if isinstance(key, str):
+                run._command_index[key] = len(run.commands) - 1
+        elif done or output:
+            run.commands[index] = command
+            run.outputs[index] = output
+    elif not done:
+        return
+    elif kind == "agent_message":
         run.text = str(item.get("text", "")).strip()  # the last message is the answer
-    elif kind == "command_execution":
-        run.commands.append(str(item.get("command", "")))
-        run.outputs.append(str(item.get("aggregated_output", "")))
     elif kind == "error":
         run.warnings.append(str(item.get("message", "")))
+
+
+# --- Codex's tool-call log (stderr) ----------------------------------------------------
+
+# A tracing record starts a line: ``2026-09-30T18:50:53.614230Z  INFO spans: target: …``.
+_LOG_RECORD = re.compile(
+    r"^\d{4}-\d\d-\d\dT\d\d:\d\d:\d\d(?:\.\d+)?Z\s+(?:TRACE|DEBUG|INFO|WARN|ERROR)\s", re.M
+)
+_LOG_FIELD = re.compile(r'([\w.]+)=(?:"((?:[^"\\]|\\.)*)"|(\S*))')
+_TELEMETRY = "codex_otel."
+_CALL_RECEIVED = 'codex_otel.trace_safe: event.name="codex.tool_call_received" '
+_SANDBOX_OUTCOME = 'codex_otel.trace_safe: event.name="codex.sandbox_outcome" '
+_TOOL_RESULT = 'codex_otel.log_only: event.name="codex.tool_result" '
+
+
+@dataclass(slots=True)
+class ToolLog:
+    """What Codex's ``codex_otel`` events on stderr say about one run's tool calls."""
+
+    present: bool = False  # at least one ``trace_safe`` record: the filter took effect
+    calls: list[tuple[str, str]] = field(default_factory=list)  # (call_id, tool name)
+    denied: set[str] = field(default_factory=set)  # call ids the sandbox denied
+    # call id: (command, output), or None when its record is unreadable or not the only one
+    results: dict[str, tuple[str, str] | None] = field(default_factory=dict)
+
+
+def _log_records(stderr: str) -> list[str]:
+    starts = [m.start() for m in _LOG_RECORD.finditer(stderr)]
+    return [stderr[a:b] for a, b in zip(starts, [*starts[1:], len(stderr)], strict=False)]
+
+
+def _fields(text: str) -> dict[str, str]:
+    out: dict[str, str] = {}
+    for m in _LOG_FIELD.finditer(text):
+        value = re.sub(r"\\(.)", r"\1", m[2]) if m[2] is not None else m[3]
+        out.setdefault(m[1], value)
+    return out
+
+
+def parse_tool_log(stderr: str) -> ToolLog:
+    """Read Codex's ``codex_otel`` records (see :data:`TELEMETRY_LOG_FILTER`).
+
+    The tool output inside a ``codex.tool_result`` record is text the command printed,
+    so it could hold lines that look like records. Such a line can add a call, cut a
+    result short or add a second result for a call, and each makes
+    :func:`reconcile_tool_calls` fail closed.
+    """
+    log = ToolLog()
+    for record in _log_records(stderr):
+        head = record.split("\n", 1)[0]
+        if "codex_otel.trace_safe: " in head:
+            log.present = True
+        if _CALL_RECEIVED in head:
+            f = _fields(head.split(_CALL_RECEIVED, 1)[1])
+            log.calls.append((f.get("call_id", ""), f.get("tool_name", "")))
+        elif _SANDBOX_OUTCOME in head:
+            f = _fields(head.split(_SANDBOX_OUTCOME, 1)[1])
+            if f.get("outcome") == "denied":
+                log.denied.add(f.get("call_id", ""))
+        elif _TOOL_RESULT in head:
+            _tool_result(log, record.split(_TOOL_RESULT, 1)[1])
+    return log
+
+
+def _tool_result(log: ToolLog, body: str) -> None:
+    """``… call_id=s1 … arguments={"cmd": …} output=<text> mcp_server= …``: the command
+    and the output the model got, with Codex's header (``Chunk ID`` … ``Output:``) cut."""
+    head, sep, rest = body.partition(" arguments=")
+    f = _fields(head)
+    if f.get("tool_name") != "exec_command":
+        return
+    call_id = f.get("call_id", "")
+    if call_id in log.results:  # a second record for one call: trust neither
+        log.results[call_id] = None
+        return
+    log.results[call_id] = None
+    try:
+        arguments, end = json.JSONDecoder().raw_decode(rest)
+    except ValueError:
+        return
+    output, sep, _ = rest[end:].removeprefix(" output=").rpartition(" mcp_server=")
+    if not sep or not isinstance(arguments, dict) or not isinstance(arguments.get("cmd"), str):
+        return
+    _header, marker, printed = output.partition("\nOutput:\n")
+    log.results[call_id] = (arguments["cmd"], printed if marker else output)
+
+
+def reconcile_tool_calls(run: CodexRun, log: ToolLog) -> None:
+    """Hold the JSONL to the tool calls Codex logged (#74), failing closed.
+
+    Every shell call becomes a ``command_execution`` item, except one the sandbox
+    denied: on 0.159.1 a command that exits within 150 ms with output such as
+    ``Operation not permitted`` is refused before its item starts. That is every
+    Seatbelt denial on macOS. Those calls are taken from the log. After that, a
+    call to a tool that isn't offered, a shell call without an item, or an item
+    without a logged call (the log didn't work) goes to :attr:`CodexRun.forbidden`.
+    """
+    if not log.present:
+        # Anything the run could hand back (an answer, a command, a finished turn) needs
+        # the log; only a run that produced nothing may lack it, and its error wins.
+        if run.completed or run.text or run.command_items:
+            run.forbidden.append("no codex tool-call log")
+        return
+    run.tool_calls = [name for _, name in log.calls]
+    run.forbidden += [f"tool {name!r}" for _, name in log.calls if name not in SHELL_TOOLS]
+    shell = [call_id for call_id, name in log.calls if name == "exec_command"]
+    denied = [call_id for call_id in shell if call_id in log.denied]
+    for call_id in denied:
+        result = log.results.get(call_id)
+        if result is None:
+            run.forbidden.append("tool 'exec_command' without a logged result")
+        else:
+            run.commands.append(result[0])
+            run.outputs.append(result[1])
+    if run.command_items < len(shell) - len(denied):
+        run.forbidden.append("tool 'exec_command' without an item")
+    elif run.command_items > len(shell) - len(denied):
+        run.forbidden.append("item 'command_execution' without a logged call")
+
+
+def _stderr_detail(stderr: str) -> str:
+    """stderr without the ``codex_otel`` records, for error messages.
+
+    A record ends where the next one starts, so plain text Codex prints after one
+    (``Error: …``) sits inside it. Only the record's own lines are dropped: its first
+    line, or for a ``codex.tool_result`` everything through the ``mcp_server=`` line.
+    """
+    first = _LOG_RECORD.search(stderr)
+    kept = [stderr[: first.start()] if first else stderr]
+    for record in _log_records(stderr):
+        head, _, rest = record.partition("\n")
+        if _TELEMETRY not in head:
+            kept.append(record)
+        elif _TOOL_RESULT in head and " mcp_server=" in record:
+            end = record.rindex(" mcp_server=")
+            kept.append(record[end:].partition("\n")[2])
+        else:
+            kept.append(rest)
+    return "".join(kept).strip()
 
 
 def _add(a: Usage, b: Usage) -> Usage:
@@ -769,10 +946,12 @@ class CodexBrain:
         if remaining <= 0:
             raise BrainTimeoutError(f"no answer within {s.timeout_s:g} s")
         key = self._api_key() if self._api_key is not None else None
+        env = {**process_env(key), "RUST_LOG": TELEMETRY_LOG_FILTER}
         result = await self._runner.run(
-            argv, stdin=prompt, env=process_env(key), cwd=self.meeting_dir, timeout_s=remaining
+            argv, stdin=prompt, env=env, cwd=self.meeting_dir, timeout_s=remaining
         )
         run = parse_events(result.stdout)
+        reconcile_tool_calls(run, parse_tool_log(result.stderr))
         self.last_run = run
         if run.commands:
             log.info("codex ran %d read-only command(s) in the meeting folder", len(run.commands))
@@ -784,7 +963,7 @@ class CodexBrain:
         if run.errors and not run.completed:
             raise _error_for(run.errors[-1])
         if result.returncode != 0:
-            detail = run.errors[-1] if run.errors else result.stderr.strip() or "no output"
+            detail = run.errors[-1] if run.errors else _stderr_detail(result.stderr) or "no output"
             raise _error_for(f"exit {result.returncode}: {detail}")
         return run
 
