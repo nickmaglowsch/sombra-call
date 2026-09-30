@@ -128,6 +128,45 @@ One-time setup, step by step:
 5. **Test it without a release:** Actions → Release → Run workflow (branch `main`). The **app** job's summary must say "the project's self-signed certificate", and **app-smoke (release)** must print `release-ready: signed by the pinned certificate`.
 6. **Then push an rc tag** (`v0.2.0-rc1`) and check that the pre-release lists `Sombra-0.2.0rc1-macos-arm64.zip` in `SHA256SUMS`, with no "ad-hoc" note in its release notes.
 
+## Homebrew tap
+
+`brew install --cask nickmaglowsch/sombra/sombra` installs `Sombra.app` (#51), so the macOS permissions belong to Sombra. The app is self-signed and not notarized by Apple: the owner decided against a paid Apple Developer account (#50). Homebrew quarantines every cask download, and Gatekeeper blocks an unnotarized app while it is quarantined. The cask never removes the flag (owner decision, #51), so the documented install has a second step the user runs: `xattr -dr com.apple.quarantine /Applications/Sombra.app`, or Open Anyway in System Settings. The caveats, the tap README and `docs/install.md` say so. Unit tests assert that the rendered cask has no quarantine-removal code. Homebrew no longer has an install option to skip quarantine: it was removed in Homebrew 6.0 (Homebrew/brew#20755). The cask lives in the tap repository `nickmaglowsch/homebrew-sombra`. It is rendered from `packaging/homebrew/sombra.rb.tmpl` and needs the release asset `Sombra-<version>-macos-arm64.zip` from #50, listed in `SHA256SUMS`. A release without that zip gets no cask: the Homebrew workflow fails instead of falling back to the wheel. homebrew-core is out of reach, because its policy builds from source and onnxruntime publishes no sdist ([ADR 0044](adr/0044-release-packaging.md)).
+
+### One-time setup (owner)
+
+1. Create the public repository `nickmaglowsch/homebrew-sombra` from the bootstrap in `packaging/homebrew/tap/` (the README and an empty `Casks/`):
+
+   ```sh
+   gh repo create nickmaglowsch/homebrew-sombra --public --clone \
+     --description "Homebrew tap for Sombra"
+   cp -R sombra-call/packaging/homebrew/tap/. homebrew-sombra/   # from the folder holding both
+   cd homebrew-sombra && git add -A && git commit -m "Bootstrap the tap" && git push -u origin HEAD
+   ```
+
+   The name must start with `homebrew-` so that `brew tap nickmaglowsch/sombra` finds it.
+2. Create a **fine-grained personal access token** limited to that one repository, with **Contents: Read and write** and nothing else. Give it an expiry you will remember to renew.
+3. Add it to `nickmaglowsch/sombra-call` as the repository secret `HOMEBREW_TAP_TOKEN` (Settings > Secrets and variables > Actions).
+4. Check it: run **Homebrew** from the Actions tab with `dry_run` on. The `bump tap (dry run)` job prints the diff it would push.
+
+Without `HOMEBREW_TAP_TOKEN`, the workflow still renders and audits the cask, but the push step is a no-op with a notice.
+
+### What happens on a release
+
+The **Homebrew** workflow (`.github/workflows/homebrew.yml`) runs when the Release workflow finishes on a tag. `release.yml` publishes with `GITHUB_TOKEN`, and that starts no `release` event, so this is a `workflow_run` trigger. The workflow also runs on `release: published`, for a release published by hand.
+
+1. **resolve**: skips pre-releases. The tap only gets final versions.
+2. **validate** (macos-14): downloads the release's `SHA256SUMS` and renders the cask with `packaging/homebrew/cask.py render`. It then runs `brew style` and `brew audit --cask --strict` on it, from a throwaway local tap.
+3. **smoke** (macos-14): `brew install --cask` from the real release URL, with the cask exactly as it will go to the tap. `Sombra.app` must be quarantined, which proves the cask didn't clear the flag. The script then runs the documented user step (`xattr -dr com.apple.quarantine`) in the user's place. Then `sombra --version`, which must print the version, and `sombra doctor --json`, whose output must parse. Then `brew uninstall --cask --zap`, which must leave `~/Sombra/meetings` intact.
+4. **bump**: clones the tap with the token and runs `cask.py bump`. It commits `Casks/sombra.rb` as `sombra X.Y.Z` and pushes. An unchanged cask pushes nothing. A patch to an older line (`v0.2.1` after `v0.3.0`) never downgrades the tap.
+
+PRs that touch `packaging/homebrew/` run **validate** against a fake `SHA256SUMS`, plus the bump as a dry run that prints its diff. By hand (Actions > Homebrew > Run workflow):
+
+- `tag`: the release to render (empty means the latest).
+- `dry_run`: on by default; it prints the diff instead of pushing.
+- `app_zip_url`: smoke-installs any `Sombra-<version>-macos-arm64.zip`, such as an rc asset, through a `file://` cask.
+
+To re-publish a cask after fixing the template, run it by hand with `dry_run` off. The cask never removes `~/Sombra/meetings`: `zap` deletes only `~/.cache/sombra` and `~/.config/sombra`, and a unit test holds that.
+
 ## Release helpers
 
 `scripts/release/` holds small, standard-library-only scripts, tested in `tests/release/`:
@@ -140,3 +179,5 @@ One-time setup, step by step:
 - `import-signing-identity.sh`: loads a `.p12` into a temporary keychain for `codesign` (macOS, CI).
 
 `packaging/macos/` builds the app: `build.py` (PyInstaller, `sombra.spec`), `sign.py` (inside-out signing), `entitlements.plist`, `sombra_app.py` (bundle id, `Info.plist`, PT-BR/EN usage strings) and `shim/sombra.c` (the CLI shim). Tests are in `tests/release/`.
+
+The Homebrew cask renderer is `packaging/homebrew/cask.py`, tested in `tests/packaging/` (see [Homebrew tap](#homebrew-tap)).

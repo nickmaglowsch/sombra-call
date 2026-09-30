@@ -1,0 +1,47 @@
+# Rendered by packaging/homebrew/cask.py from a release's SHA256SUMS (issue #51).
+# Do not edit the copy in the tap by hand: the Homebrew workflow overwrites it on every release.
+cask "sombra" do
+  version "@@VERSION@@"
+  sha256 "@@SHA256@@"
+
+  url "@@URL@@"
+  name "Sombra"
+  desc "Local meeting agent that transcribes calls and suggests answers"
+  homepage "https://github.com/nickmaglowsch/sombra-call"
+
+  livecheck do
+    url :url
+    strategy :github_latest
+  end
+
+  depends_on arch: :arm64
+  depends_on macos: :sonoma
+
+  app "Sombra.app"
+  binary "#{appdir}/@@SHIM@@"
+
+  # Config and models only. Meetings (~/Sombra/meetings) are user data and are never zapped.
+  zap trash: [
+    "~/.cache/sombra",
+    "~/.config/sombra",
+  ]
+
+  caveats <<~EOS
+    Sombra.app is self-signed and not notarized by Apple (Sombra has no paid
+    Apple Developer account), so Gatekeeper blocks its first launch while it
+    carries the quarantine flag Homebrew sets. This cask never removes that flag.
+    Clear it yourself, for this app only, with one of:
+      xattr -dr com.apple.quarantine /Applications/Sombra.app
+    or open Sombra once, then System Settings > Privacy & Security > Open Anyway.
+
+    Next steps:
+      1. sombra doctor              # checks models, permissions and agent CLIs
+      2. sombra models download     # whisper + VAD models (about 580 MB)
+      3. Grant Microphone, Screen Recording and Accessibility to Sombra
+         in System Settings > Privacy & Security (not to your terminal)
+      4. sombra setup               # choose the agent provider
+
+    Your meetings in ~/Sombra/meetings are never removed,
+    not even by `brew uninstall --zap`.
+  EOS
+end
