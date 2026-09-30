@@ -13,6 +13,7 @@ the minutes drop an action item with an invented time. Replacing it with the nea
 real time would print a precise-looking source the model never chose, and marking it
 would still show the user a time that does not exist.
 
+- ``[[...]]`` counts as one bracket; a bracket may span lines.
 - A bracket whose times are all real is left byte for byte as the model wrote it.
 - Otherwise each invalid time goes with its separator and the rest stays:
   ``[14:30:05, 00:00:00]`` -> ``[14:30:05]``, ``[00:00:00, f0003]`` -> ``[f0003]``. A
@@ -37,15 +38,15 @@ from sombra.summary.transcript import read_transcript
 
 _TIME_RE = re.compile(r"\d{1,2}:\d{2}:\d{2}")
 _FRAME_RE = re.compile(r"f\d{4,}")  # contracts.timeline.FRAME_ID_RE, unanchored
-# One bracket (no nesting, one line), with the space and emphasis
+# One bracket (no nesting; it may span lines), with the space and emphasis
 # around it so a dropped citation leaves neither "x ." nor "****" behind.
 _BRACKET_RE = re.compile(
     r"(?P<space>[ \t]*)(?P<em>\*\*|__|\*|_|`)?"
-    r"\[(?P<inner>[^\[\]\n]*)\]"
+    r"(?P<outer>\[)?\[(?P<inner>[^\[\]]*)\](?(outer)\])"
     r"(?(em)(?P=em))(?P<after>[ \t]?)"
 )
 # What joins the items of a citation: punctuation, "e"/"a"/"até", or plain spaces.
-_SEP_RE = re.compile(r"(\s*[,;–—]\s*|\s*(?<=\d)-(?=\d)\s*|\s+-\s+|\s+(?:e|a|até)\s+|\s+)")
+_SEP_RE = re.compile(r"(\s*[,;/–—]\s*|\s*(?<=\d)-(?=\d)\s*|\s+-\s+|\s+(?:e|a|até)\s+|\s+)")
 
 
 @dataclass(frozen=True, slots=True)
@@ -90,8 +91,8 @@ def check_citations(text: str, known: set[str]) -> CheckedAnswer:
             kept += item
         if not (_TIME_RE.search(kept) or _FRAME_RE.search(kept)):
             return m["after"] if m["space"] else ""  # one of the spaces around it, not both
-        em = m["em"] or ""
-        return f"{m['space']}{em}[{kept}]{em}{m['after']}"
+        em, outer = m["em"] or "", m["outer"] or ""
+        return f"{m['space']}{em}{outer}[{kept}]{']' if outer else ''}{em}{m['after']}"
 
     checked = _BRACKET_RE.sub(fix, text)
     return CheckedAnswer(checked, tuple(dropped))
