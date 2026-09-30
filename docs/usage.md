@@ -67,7 +67,7 @@ When someone asks you something ("Mariana, o que você acha desse gráfico?"), t
 
 `--level` overrides `autonomy_level` from the config for one meeting.
 
-The agent that answers is `brain.backend` in the config: `claude` (default; needs the Anthropic key) or `codex` (the Codex CLI; uses `sombra auth set openai` or an existing `codex login`). Summaries and minutes always use Claude, so without an Anthropic key they are skipped ([config.md](config.md#agent-backend)).
+The agent that answers is `brain.backend` in the config: `claude` (default; needs the Anthropic key) or `codex` (the Codex CLI; uses `sombra auth set openai` or an existing `codex login`). The Codex backend only runs on a Codex CLI version whose tool set was verified, currently 0.159.1 (`npm i -g @openai/codex@0.159.1`). A newer or older CLI is refused with a message saying so ([ADR 0018](adr/0018-codex-backend.md)). Summaries and minutes always use Claude, so without an Anthropic key they are skipped ([config.md](config.md#agent-backend)).
 
 ## Pause
 
