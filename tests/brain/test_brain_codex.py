@@ -43,7 +43,7 @@ from sombra.brain.codex import (
     ProcessResult,
     SubprocessRunner,
     build_argv,
-    codex_read_roots,
+    codex_read_paths,
     confine_catalog,
     flatten_request,
     parse_events,
@@ -367,7 +367,7 @@ def test_sandbox_args_quote_any_folder_name(tmp_path: Path) -> None:
         assert cfg["model_catalog_json"] == str(catalog)
 
 
-# --- the Codex install the Linux sandbox reads (#63) --------------------------------------
+# --- the Codex binary the Linux sandbox reads (#63) --------------------------------------
 
 ELF = b"\x7fELF\x02\x01\x01\x00"
 SHIM = b"#!/usr/bin/env node\n// Unified entry point for the Codex CLI.\n"
@@ -395,8 +395,8 @@ def npm_global(prefix: Path, native: str = f"codex/node_modules/@openai/{LINUX_X
     return link(prefix / "bin" / "codex", "../lib/node_modules/@openai/codex/bin/codex.js")
 
 
-def roots(command: Path | str, meeting: Path, home: Path, platform: str = "linux") -> list[Path]:
-    return list(codex_read_roots(str(command), meeting, platform=platform, home=home))
+def paths(command: Path | str, platform: str = "linux") -> list[Path]:
+    return list(codex_read_paths(str(command), platform=platform))
 
 
 @pytest.mark.parametrize(
@@ -408,26 +408,24 @@ def roots(command: Path | str, meeting: Path, home: Path, platform: str = "linux
         "usr/local",
     ],
 )
-def test_npm_shim_resolves_to_the_native_binary_folder(tmp_path: Path, prefix: str) -> None:
-    home = tmp_path / "home" / "nick"
+def test_npm_shim_resolves_to_the_native_binary(tmp_path: Path, prefix: str) -> None:
     shim = npm_global(tmp_path / prefix)
     native = tmp_path / prefix / "lib/node_modules/@openai/codex/node_modules/@openai" / LINUX_X64
-    meeting = home / "Sombra" / "reunião"
-    assert roots(shim, meeting, home) == [native.resolve()]
+    assert paths(shim) == [(native / "codex").resolve()]
 
 
 def test_npm_shim_found_through_path(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     shim = npm_global(tmp_path / "opt" / "node22")
     monkeypatch.setenv("PATH", str(shim.parent))
     native = tmp_path / "opt/node22/lib/node_modules/@openai/codex/node_modules/@openai"
-    assert roots("codex", tmp_path / "m" / "x", tmp_path / "h") == [(native / LINUX_X64).resolve()]
+    assert paths("codex") == [(native / LINUX_X64 / "codex").resolve()]
 
 
 def test_hoisted_platform_package(tmp_path: Path) -> None:
     arm = "codex-linux-arm64/vendor/aarch64-unknown-linux-musl/bin"
     shim = npm_global(tmp_path / "opt" / "n", native=arm)
-    expected = (tmp_path / "opt/n/lib/node_modules/@openai" / arm).resolve()
-    assert roots(shim, tmp_path / "m" / "x", tmp_path / "h") == [expected]
+    expected = (tmp_path / "opt/n/lib/node_modules/@openai" / arm / "codex").resolve()
+    assert paths(shim) == [expected]
 
 
 def test_pnpm_store_symlinks(tmp_path: Path) -> None:
@@ -435,84 +433,86 @@ def test_pnpm_store_symlinks(tmp_path: Path) -> None:
     codex = store / "@openai+codex@0.159.1/node_modules/@openai"
     put(codex / "codex" / "bin" / "codex.js", SHIM)
     platform_pkg = store / "@openai+codex-linux-x64@0.159.1/node_modules/@openai/codex-linux-x64"
-    put(platform_pkg / "vendor/x86_64-unknown-linux-musl/bin/codex", ELF)
+    native = put(platform_pkg / "vendor/x86_64-unknown-linux-musl/bin/codex", ELF)
     link(codex / "codex-linux-x64", str(platform_pkg))
     shim = link(tmp_path / "home/nick/.local/share/pnpm/codex", str(codex / "codex/bin/codex.js"))
-    expected = (platform_pkg / "vendor/x86_64-unknown-linux-musl/bin").resolve()
-    assert roots(shim, tmp_path / "m" / "x", tmp_path / "home/nick") == [expected]
+    assert paths(shim) == [native.resolve()]
 
 
 def test_vendor_inside_the_codex_package(tmp_path: Path) -> None:
     pkg = tmp_path / "opt/lib/node_modules/@openai/codex"
     shim = put(pkg / "bin" / "codex.js", SHIM)
-    put(pkg / "vendor/x86_64-unknown-linux-musl/bin/codex", ELF)
+    native = put(pkg / "vendor/x86_64-unknown-linux-musl/bin/codex", ELF)
     put(pkg / "vendor/aarch64-apple-darwin/bin/codex", ELF)  # another OS: never added
-    expected = (pkg / "vendor/x86_64-unknown-linux-musl/bin").resolve()
-    assert roots(shim, tmp_path / "m" / "x", tmp_path / "h") == [expected]
+    assert paths(shim) == [native.resolve()]
 
 
 def test_native_binary_and_homebrew_symlink(tmp_path: Path) -> None:
     cellar = put(tmp_path / "linuxbrew/Cellar/codex/0.159.1/bin/codex", ELF)
     brew = link(tmp_path / "linuxbrew/bin/codex", "../Cellar/codex/0.159.1/bin/codex")
-    assert roots(brew, tmp_path / "m" / "x", tmp_path / "h") == [cellar.parent.resolve()]
+    assert paths(brew) == [cellar.resolve()]
+
+
+def test_release_binary_in_a_user_folder_grants_only_the_file(tmp_path: Path) -> None:
+    """Review of #68: a binary in ``~/Downloads`` must not expose ``~/Downloads``."""
+    downloads = tmp_path / "home" / "nick" / "Downloads"
+    binary = put(downloads / "codex", ELF)
+    (downloads / "notes.txt").write_text("segredo", encoding="utf-8")
+    assert paths(binary) == [binary.resolve()]
+
+
+def test_symlinked_vendor_binary_grants_its_target_file_only(tmp_path: Path) -> None:
+    pkg = tmp_path / "opt/lib/node_modules/@openai/codex"
+    shim = put(pkg / "bin" / "codex.js", SHIM)
+    target = put(tmp_path / "home/nick/Documents/codex", ELF)
+    link(pkg / "vendor/x86_64-unknown-linux-musl/bin/codex", str(target))
+    assert paths(shim) == [target.resolve()]
 
 
 def test_shim_without_a_native_binary_adds_nothing(tmp_path: Path) -> None:
     shim = put(tmp_path / "opt/lib/node_modules/@openai/codex/bin/codex.js", SHIM)
-    assert roots(shim, tmp_path / "m" / "x", tmp_path / "h") == []
-    assert roots(tmp_path / "missing" / "codex", tmp_path / "m" / "x", tmp_path / "h") == []
+    assert paths(shim) == []
+    assert paths(tmp_path / "missing" / "codex") == []
+    pkg = tmp_path / "other/lib/node_modules/@openai/codex"
+    other = put(pkg / "bin" / "codex.js", SHIM)
+    put(pkg / "vendor/x86_64-unknown-linux-musl/bin/codex", SHIM)  # a script, not native
+    assert paths(other) == []
 
 
-@pytest.mark.parametrize("where", ["home", "home-parent", "vault", "meeting", "other-meeting"])
-def test_refuses_a_folder_wider_than_the_install(tmp_path: Path, where: str) -> None:
-    """A codex binary dropped in ``~`` must not hand the agent the whole home folder."""
-    home = tmp_path / "home" / "nick"
-    meeting = home / "Sombra" / "2026-09-30 daily"
-    folder = {
-        "home": home,
-        "home-parent": home.parent,
-        "vault": meeting.parent,
-        "meeting": meeting,
-        "other-meeting": meeting.parent / "2026-09-29 review",
-    }[where]
-    binary = put(folder / "codex", ELF)
-    assert roots(binary, meeting, home) == []
-
-
-def test_macos_seatbelt_needs_no_extra_folder(tmp_path: Path) -> None:
+def test_macos_seatbelt_needs_no_extra_path(tmp_path: Path) -> None:
     """Seatbelt runs the command under ``sandbox-exec``; Codex doesn't re-exec itself."""
     shim = npm_global(tmp_path / "opt" / "homebrew")
-    assert roots(shim, tmp_path / "m" / "x", tmp_path / "h", platform="darwin") == []
+    assert paths(shim, platform="darwin") == []
 
 
-def test_codex_folder_is_read_only_and_quoted(tmp_path: Path) -> None:
+def test_codex_binary_is_read_only_and_quoted(tmp_path: Path) -> None:
     folder = tmp_path / "reunião"
-    install = [tmp_path / 'o"p\\t' / "bin", tmp_path / "nvm ✓" / "bin"]
-    call = Call(
-        ["codex", *sandbox_args(folder, tmp_path / "m.json", install), "-"], "", {}, folder, 1
-    )
-    assert call.config()[f"permissions.{PERMISSION_PROFILE}.filesystem"] == {
+    binaries = [tmp_path / 'o"p\\t' / "codex", tmp_path / "nvm ✓" / "codex"]
+    argv = ["codex", *sandbox_args(folder, tmp_path / "m.json", binaries), "-"]
+    assert Call(argv, "", {}, folder, 1).config()[
+        f"permissions.{PERMISSION_PROFILE}.filesystem"
+    ] == {
         ":minimal": "read",
         str(folder): "read",
-        str(install[0]): "read",
-        str(install[1]): "read",
+        str(binaries[0]): "read",
+        str(binaries[1]): "read",
     }
 
 
-def expected_fs(meeting: Path, *install: Path) -> dict[str, str]:
+def expected_fs(meeting: Path, *binaries: Path) -> dict[str, str]:
     fs = {":minimal": "read", str(meeting.resolve()): "read"}
     if sys.platform.startswith("linux"):
-        fs.update({str(p.resolve()): "read" for p in install})
+        fs.update({str(p.resolve()): "read" for p in binaries})
     return fs
 
 
 @pytest.mark.parametrize("override", [False, True])
-async def test_start_adds_the_codex_folder_to_every_run(
+async def test_start_adds_the_codex_binary_to_every_run(
     meeting: Path, tmp_path_factory: pytest.TempPathFactory, override: bool
 ) -> None:
-    prefix = tmp_path_factory.mktemp("opt") / "node22"  # outside the meeting's parent
+    prefix = tmp_path_factory.mktemp("opt") / "node22"
     shim = npm_global(prefix)
-    native = prefix / "lib/node_modules/@openai/codex/node_modules/@openai" / LINUX_X64
+    native = prefix / "lib/node_modules/@openai/codex/node_modules/@openai" / LINUX_X64 / "codex"
     exe = ("/usr/bin/env", "X=1", str(shim)) if override else (str(shim),)
     fake = FakeCodex(events("PRECISO_DA_TELA f0002"), events("ok"))
     binary = str(shim) if override else None
