@@ -36,7 +36,7 @@ What the Codex source says (openai/codex at `94d642d`, 2026-09-29; the same code
      --ephemeral --skip-git-repo-check --ignore-user-config --ignore-rules
      --cd <meeting>
      -c default_permissions="sombra"
-     -c permissions.sombra.filesystem={":minimal"="read","<meeting>"="read"}
+     -c permissions.sombra.filesystem={":minimal"="read","<meeting>"="read"[,"<codex install>"="read"]}
      -c permissions.sombra.network.enabled=false
      -c approval_policy="never"  -c web_search="disabled"
      -c features.view_image=false  -c project_doc_max_bytes=0
@@ -48,7 +48,7 @@ What the Codex source says (openai/codex at `94d642d`, 2026-09-29; the same code
      [--image frames/fNNNN.jpg ...]  -
    ```
 
-   **The "read-only sandbox" is this profile**, not `--sandbox read-only`. It has no `write` entry anywhere, and network is off. Unlike `--sandbox read-only`, it cannot read the user's home. We never pass `--sandbox`, because Codex would then drop the profile without warning (fact 3). Tests assert on every run that `--sandbox`, `--add-dir` and every `dangerously`/`yolo`/`full-auto` flag are absent. They also assert that the profile is exactly `{":minimal": "read", <meeting>: "read"}` with network disabled. The folder path is quoted as a TOML string, so no folder name can inject config.
+   **The "read-only sandbox" is this profile**, not `--sandbox read-only`. It has no `write` entry anywhere, and network is off. Unlike `--sandbox read-only`, it cannot read the user's home. We never pass `--sandbox`, because Codex would then drop the profile without warning (fact 3). Tests assert on every run that `--sandbox`, `--add-dir` and every `dangerously`/`yolo`/`full-auto` flag are absent. They also assert that the profile is exactly `{":minimal": "read", <meeting>: "read"}` with network disabled, plus, on Linux only, the folder of the native `codex` binary (decision 8). Every path is quoted as a TOML string, so no folder name can inject config.
 2. **Defense in depth on top of the OS sandbox:**
    - The process gets a minimal environment (`PATH`, `HOME`, locale, `TMPDIR`, `CODEX_HOME`, plus `CODEX_API_KEY` from the keychain callable). Other secrets in Sombra's environment never reach the agent's shell.
    - The API key goes in the environment only, never in argv or the prompt.
@@ -71,8 +71,17 @@ What the Codex source says (openai/codex at `94d642d`, 2026-09-29; the same code
 
 7. **The model is offered only the shell (#57).** `CodexBrain.start()` runs `codex debug models --bundled` and clears the tool-adding fields on every model (`confine_catalog`). The fields and their new values are `tool_mode = null`, `multi_agent_version = null`, `experimental_supported_tools = []`, `supports_search_tool = false` and `apply_patch_tool_type = null`. The result goes to `models.json` in a fresh `mkdtemp` folder (0700 folder, 0600 file) outside the meeting folder, and every run loads it with `model_catalog_json`. `close()` deletes it. This costs once per meeting, not per trigger: the command took a median of 0.057 s over 5 runs here (Linux x86-64), for a 659 kB catalog. If the command fails or its output isn't a non-empty catalog of objects with a `slug`, `start()` raises `BrainError`, and Codex never runs with its default tools. The flags from decision 1 remove what the catalog doesn't: goals, multi-agent v1 and `request_user_input`. `code_mode`, `code_mode_only` and `multi_agent_v2` are off already on 0.159.1; disabling them explicitly keeps a future default change from bringing those tools back. What remains is `exec_command` plus `write_stdin`. These make up the unified-exec shell, which runs under the permission profile and is the shell this ADR accepts. `tests/brain/test_brain_codex_capture.py` checks this with the real CLI on every run where `codex` is installed.
 
+8. **On Linux the profile also reads the Codex install (#63).** Codex starts every shell command through bubblewrap, and inside the sandbox it runs its own native binary again before the command. `:minimal` mounts only the system roots, so with an npm install outside them (`/opt/node22`, `~/.npm-global`, nvm, pnpm) every command failed with `bwrap: execvp …/codex-linux-x64/vendor/x86_64-unknown-linux-musl/bin/codex: No such file or directory`. That failed closed, but the agent couldn't read the meeting folder at all. `codex_read_roots` finds the binary when the brain starts, once per meeting:
+   - `shutil.which` on the CLI (`[brain] executable[0]`, or `CodexSettings.codex_binary` when the executable is a wrapper), then `realpath`.
+   - A native binary (release tarball, Homebrew) gives its own folder.
+   - The npm Node shim (`<pkg>/bin/codex.js`, a `#!` script) gives the folder of the native binary it starts: `@openai/codex-linux-<arch>/vendor/<triple>/bin`, nested in `<pkg>/node_modules`, hoisted next to `<pkg>` (a pnpm store symlink resolves the same way), or `<pkg>/vendor/<triple>/bin`. Only Linux triples count.
+   - Node is **not** added. The shim runs outside the sandbox, and only the native binary runs inside it. Measured: the command works with just that `bin` folder added.
+   - The grant is `read`, for that one folder, which holds only the Codex binaries. A folder that would reach past the install is refused, and commands then fail closed as before: the filesystem root, the home folder or any of its parents, and the meeting's parent folder (the other meetings), its parents or anything inside it. So a `codex` binary dropped straight into `~` never hands the agent the home folder.
+   - **macOS doesn't need this.** Seatbelt runs the command itself under `sandbox-exec` with the generated profile. Codex doesn't re-run its own binary inside that sandbox, so a Homebrew or npm prefix outside the Seatbelt read roots doesn't matter. `codex_read_roots` returns nothing there, and the profile stays `{":minimal", <meeting>}`. This comes from Codex's design; it hasn't been run on a Mac yet. `test_shell_reads_the_meeting_folder_and_nothing_else` checks it on the first capture run there (see "Left for a human").
+
 ## Consequences
 
+- **Supported Linux installs (#63):** `npm i -g @openai/codex@0.159.1` under any prefix (`/usr`, `/usr/local`, `/opt/…`, `~/.npm-global`, nvm), pnpm global, the release binary anywhere except `~` itself or the meetings folder, and Homebrew on Linux. Anything else, such as a wrapper script that isn't the npm shim, needs `codex_binary` pointing at the real CLI. Otherwise its shell fails closed and the agent answers from the prompt alone.
 - **The OS minimum stays readable.** `:minimal` keeps system roots readable: `/etc` and `/usr` on Linux, the system paths on macOS. So `cat /etc/passwd` works, while `~/.ssh`, `~/Documents` and other meetings do not. These roots hold no user data and are world-readable anyway. Removing them would stop the shell from starting.
 - **The agent has a shell**, confined as above, instead of our three tools. It can run `rg`, `cat` and `ls` in the folder but can't write, reach the network or leave the folder's read scope. Our `brain.tools` limits (no regex in grep, size caps) do not apply to Codex.
 - **Process start is paid on every trigger.** The CLI's startup time counts against the 2–4 s LLM budget. There is no warm-up equivalent to Claude's `max_tokens: 0` request. OpenAI prompt caching is automatic on a byte-stable prefix. Codex's base instructions, tools and our developer instructions come first, then the append-only prefix, then the tail. Each run is a new thread, so the cache key differs per run; whether the prefix still hits the cache has to be measured.
@@ -113,7 +122,7 @@ Forced tool calls (the fake endpoint's first reply is the call; the second reque
 
 Found while doing this, out of #57's scope:
 
-- **Linux, npm install under `/opt`.** Every shell command failed with `bwrap: execvp …/codex-linux-x64/…/bin/codex: No such file or directory`. The sandbox helper lives outside the `:minimal` read roots. This fails closed, but it means the agent can't read the meeting folder. Needs a follow-up issue with a real `CODEX_HOME` (the capture used a temp one, where Codex refuses to create its helper aliases).
+- **Linux, npm install under `/opt`.** Every shell command failed with `bwrap: execvp …/codex-linux-x64/…/bin/codex: No such file or directory`. The sandbox helper lives outside the `:minimal` read roots. This failed closed, but it meant the agent couldn't read the meeting folder. Fixed in #63 (decision 8). It was checked with both a temp `CODEX_HOME` and a persistent one under `~`, where Codex does create its `tmp/arg0` helper aliases.
 - **The developer message lists Codex's bundled system skills** (`imagegen`, `openai-docs`, …, under `$CODEX_HOME/skills/.system`). No tool is attached to them, and the sandbox can't read that folder. They cost prompt tokens.
 
 ## Containment and residual risk (#57)
@@ -129,7 +138,7 @@ What actually stops an agent driven by untrusted meeting text, strongest first:
 Residual risk:
 
 - **A newer CLI could offer a new tool.** It could come from a catalog field or feature we don't clear, or from one that emits no item, so layers 1 and 5 would both miss it. The mitigation is in code: `start()` refuses any CLI above `MAX_TESTED_CLI_VERSION` (0.159.1), so Sombra never runs an unverified tool set. Rerunning the capture test and raising the cap is the maintainer process for accepting a new version, not a user-side mitigation. If the cap is raised without that capture, or someone runs `codex` outside Sombra, only layer 2 (the permission profile) is designed to hold on an unverified version. Layers 3 and 4 were observed on 0.159.1 only.
-- **The accepted shell remains.** The agent can run read-only commands in the meeting folder and read the world-readable `:minimal` roots (`/etc`, `/usr`). That was already accepted in #18.
+- **The accepted shell remains.** The agent can run read-only commands in the meeting folder and read the world-readable `:minimal` roots (`/etc`, `/usr`). That was already accepted in #18. On Linux it can also read the Codex binary's own folder (decision 8): the Codex executables, no user data.
 - **A ChatGPT login isn't verified yet.** The remote catalog refresh might override `model_catalog_json`; the live check is in the table below.
 
 ## Left for a human
@@ -154,5 +163,6 @@ uv run pytest tests/brain/test_brain_codex_capture.py -v
 | Injection: canary in `~` never read, nothing written outside, no forbidden item (`test_injection_reads_and_writes_nothing_outside`) | *pending human run* |
 | Codex CLI version used (must be exactly 0.159.1 for now; `start()` refuses older and newer) | *pending human run* |
 | Request offers only `exec_command` + `write_stdin` (`test_brain_codex_capture.py`, offline) | **passed** on 0.159.1, Linux x86-64 (default model, `gpt-5.5`, unknown slug; forced `exec` and `spawn_agent` refused) |
-| Same capture on macOS | *pending human run* |
+| Shell `cat`s a file in the meeting folder; a file in the folder next to it and `~` are unreadable (`test_shell_reads_the_meeting_folder_and_nothing_else`, offline, #63) | **passed** on 0.159.1, Linux x86-64, npm under `/opt/node22`, temp and persistent `CODEX_HOME`. Without the fix the same test fails with `bwrap: execvp …/bin/codex` |
+| Same capture on macOS (incl. the #63 shell test with a Homebrew or npm prefix) | *pending human run* |
 | With a ChatGPT login, `codex debug models` + our catalog shows no tool fields, and a live answer asked to use `spawn_agent`/`exec` has no item off the allowlist (`test_live_catalog_and_run_offer_no_code_mode_or_subagents`) | *pending human run* |
