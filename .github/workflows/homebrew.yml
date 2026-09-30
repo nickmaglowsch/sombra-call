@@ -205,6 +205,9 @@ jobs:
         run: |
           zip="$RUNNER_TEMP/Sombra.zip"
           curl -fsSL -o "$zip" "$ZIP_URL"
+          # The zip's own version (an rc zip has no final release to take it from).
+          v=$(basename "$ZIP_URL" | sed -n 's/^Sombra-\(.*\)-macos-arm64\.zip$/\1/p')
+          VERSION="${v:-$VERSION}"
           uv run --no-project --python 3.12 packaging/homebrew/cask.py render \
             --version "$VERSION" --zip "$zip" --url "file://$zip" --output local/sombra.rb
           cat local/sombra.rb
