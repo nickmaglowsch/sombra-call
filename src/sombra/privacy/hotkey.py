@@ -5,10 +5,17 @@ shortcut works while another app (the call) is focused. macOS delivers global ke
 events only to apps granted Accessibility (System Settings > Privacy & Security >
 Accessibility), and only while an AppKit run loop is running on the main thread
 (the overlay's, in the full app).
+
+``start()`` checks ``AXIsProcessTrusted()`` first: when the app isn't trusted, AppKit
+can still return a monitor object that never receives events (seen on macOS 27,
+#76/#90), so a nil monitor alone is not a reliable signal. Input Monitoring
+(``CGPreflightListenEventAccess``) is not checked: it gates listen-only
+``CGEventTap``/IOHID, which this module doesn't use.
 """
 
 from __future__ import annotations
 
+import ctypes
 import importlib
 import logging
 from collections.abc import Callable
@@ -39,6 +46,17 @@ _ALIASES = {
 _NS_FLAGS = {"shift": 1 << 17, "ctrl": 1 << 18, "alt": 1 << 19, "cmd": 1 << 20}
 _NS_DEVICE_INDEPENDENT_MASK = 0xFFFF0000
 _NS_KEY_DOWN_MASK = 1 << 10
+
+_APPLICATION_SERVICES = (
+    "/System/Library/Frameworks/ApplicationServices.framework/ApplicationServices"
+)
+
+ACCESSIBILITY_WARNING = (
+    "pause shortcut {shortcut} will not work: Sombra is not trusted for Accessibility. "
+    "Open System Settings > Privacy & Security > Accessibility, switch Sombra (or your "
+    "terminal, when running from source) on, then restart sombra. "
+    "`sombra pause` / `sombra resume` work without it."
+)
 
 
 @dataclass(frozen=True, slots=True)
@@ -79,7 +97,17 @@ def parse_shortcut(text: str) -> Shortcut:
     return Shortcut(frozenset(modifiers), key)
 
 
-class MacHotkey:  # pragma: no cover - needs macOS, AppKit and the Accessibility permission
+def _load_appkit() -> Any:  # pragma: no cover - needs macOS
+    return importlib.import_module("AppKit")
+
+
+def _ax_is_process_trusted() -> bool:  # pragma: no cover - needs macOS
+    lib = ctypes.cdll.LoadLibrary(_APPLICATION_SERVICES)
+    lib.AXIsProcessTrusted.restype = ctypes.c_bool
+    return bool(lib.AXIsProcessTrusted())
+
+
+class MacHotkey:
     """Calls ``callback`` when the shortcut is pressed, whichever app is focused."""
 
     def __init__(self, shortcut: Shortcut | str, callback: Callable[[], None]) -> None:
@@ -88,8 +116,9 @@ class MacHotkey:  # pragma: no cover - needs macOS, AppKit and the Accessibility
         self._monitors: list[Any] = []
 
     def start(self) -> None:
-        appkit: Any = importlib.import_module("AppKit")
-        ns_event = appkit.NSEvent
+        """Install the monitors. Never raises for a missing grant; it logs a warning."""
+        ns_event = _load_appkit().NSEvent
+        trusted = self._trusted()
 
         def on_global(event: Any) -> None:
             self._dispatch(event)
@@ -101,13 +130,25 @@ class MacHotkey:  # pragma: no cover - needs macOS, AppKit and the Accessibility
             ns_event.addGlobalMonitorForEventsMatchingMask_handler_(_NS_KEY_DOWN_MASK, on_global),
             ns_event.addLocalMonitorForEventsMatchingMask_handler_(_NS_KEY_DOWN_MASK, on_local),
         ]
-        if self._monitors[0] is None:
-            log.warning("global shortcut not installed: grant Sombra Accessibility access")
+        if not trusted or self._monitors[0] is None:
+            log.warning(ACCESSIBILITY_WARNING.format(shortcut=self._label()))
+
+    def _trusted(self) -> bool:
+        try:
+            return _ax_is_process_trusted()
+        except Exception:  # an unreadable answer must not stop the session
+            log.debug("AXIsProcessTrusted() failed", exc_info=True)
+            return True  # unknown: fall back to the nil-monitor check
+
+    def _label(self) -> str:
+        symbols = {"ctrl": "⌃", "alt": "⌥", "shift": "⇧", "cmd": "⌘"}
+        mods = "".join(sym for m, sym in symbols.items() if m in self.shortcut.modifiers)
+        return mods + self.shortcut.key.upper()
 
     def stop(self) -> None:
         if not self._monitors:
             return
-        appkit: Any = importlib.import_module("AppKit")
+        appkit = _load_appkit()
         for monitor in self._monitors:
             if monitor is not None:
                 appkit.NSEvent.removeMonitor_(monitor)
