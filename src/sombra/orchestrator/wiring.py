@@ -10,6 +10,8 @@ adapter between a module's constructor and a :class:`Session` port or hook:
   backend needs in the keychain;
 * :class:`SummaryHooks`: ``summary``'s epoch summarizer and minutes as the
   ``summarizer`` / ``epoch_hook`` / ``minutes`` hooks (C4, M3);
+* :func:`in_daemon_thread`: how those blocking model calls run, so a second Ctrl+C
+  never waits for one (#83);
 * :class:`PauseAdapter`: ``privacy.PauseController`` as a :class:`PauseState`;
 * :func:`build_session`: the shared assembly used by ``sombra start`` (live capture,
   :mod:`.live`) and ``sombra replay`` (recorded files, :mod:`.replay`).
@@ -20,7 +22,10 @@ Modules keep reading nothing but their constructor arguments (ARCHITECTURE rule 
 from __future__ import annotations
 
 import asyncio
+import contextlib
+import contextvars
 import logging
+import threading
 from collections.abc import AsyncIterator, Awaitable, Callable, Sequence
 from dataclasses import dataclass, field
 from datetime import datetime
@@ -193,6 +198,44 @@ def summary_model_for(cfg: UserConfig, keys: Keys) -> tuple[TextModel | None, st
     return build_summary_model(cfg.summary.resolve(cfg.brain), cfg.models.summary, keys)
 
 
+# --- threads ---------------------------------------------------------------------------
+
+
+async def in_daemon_thread[**P, R](fn: Callable[P, R], /, *args: P.args, **kwargs: P.kwargs) -> R:
+    """``asyncio.to_thread``, but on a fresh daemon thread (#83).
+
+    ``to_thread`` uses the loop's default executor, whose workers are joined when the
+    loop closes (``shutdown_default_executor``, up to 300 s) and again, with no timeout,
+    at interpreter exit. A summary or minutes call that is still waiting on the model
+    then kept a second Ctrl+C from exiting. Nothing joins a daemon thread: when the
+    awaiting task is cancelled or the process exits, the call is simply abandoned.
+    """
+    loop = asyncio.get_running_loop()
+    future: asyncio.Future[R] = loop.create_future()
+    context = contextvars.copy_context()
+
+    def settle(result: R | None, error: BaseException | None) -> None:
+        if future.done():  # the awaiting task was cancelled
+            return
+        if error is not None:
+            future.set_exception(error)
+        else:
+            future.set_result(result)  # type: ignore[arg-type]  # R when error is None
+
+    def work() -> None:
+        try:
+            result: R | None = context.run(fn, *args, **kwargs)
+            error: BaseException | None = None
+        except BaseException as e:  # handed to the awaiting task, whatever it is
+            result, error = None, e
+        with contextlib.suppress(RuntimeError):  # the loop is closed: nobody is waiting
+            loop.call_soon_threadsafe(settle, result, error)
+
+    name = getattr(fn, "__name__", "call")
+    threading.Thread(target=work, name=f"sombra-{name}", daemon=True).start()
+    return await future
+
+
 # --- hooks -----------------------------------------------------------------------------
 
 
@@ -246,8 +289,9 @@ class SilentUI:
 class SummaryHooks:
     """Rolling summary (C4) and end-of-meeting minutes (M3) as :class:`Session` hooks.
 
-    The model calls are blocking, so they run in a worker thread. ``on_epoch`` gets the
-    new summary text (``ClaudeBrain.start_epoch``: the one planned prefix change).
+    The model calls are blocking, so they run in a daemon thread (:func:`in_daemon_thread`).
+    ``on_epoch`` gets the new summary text (``ClaudeBrain.start_epoch``: the one planned
+    prefix change).
     """
 
     def __init__(
@@ -274,7 +318,7 @@ class SummaryHooks:
     async def summarize(self, epoch: int) -> EpochSummary:
         now = self._now()
         entries = self._store.entries_since(self._since)
-        result = await asyncio.to_thread(self._summarizer.summarize, entries, now)
+        result = await in_daemon_thread(self._summarizer.summarize, entries, now)
         self._since = now
         append_epoch(self._store.meeting_dir / SUMMARY_FILE, result.section)
         if result.event.epoch != epoch:
@@ -293,7 +337,7 @@ class SummaryHooks:
 
     async def write_minutes(self) -> None:
         self._store.sync()
-        result = await asyncio.to_thread(
+        result = await in_daemon_thread(
             write_minutes, self._store.meeting_dir, self._model, day=self._started_at
         )
         log.info(
