@@ -93,6 +93,37 @@ sombra doctor --live                  # ...and asks it one test question
 
 `--non-interactive` never prompts, installs or logs in. It writes the choice and exits 1 with the list of what is left. Exit codes: `0` configured and answering; `1` written, but something is left or the test question failed; `2` bad arguments or a config that doesn't load.
 
+## Running the network tests on a subscription
+
+The `network` tests never run in CI. The ones written for an API key can also run on a Claude Pro/Max subscription, through the logged-in `claude` CLI, with no `ANTHROPIC_API_KEY` (#89). Log in once (`claude`, then `/login`), make sure no key is in the shell, and opt in with `SOMBRA_CLAUDE_LOGIN=1`:
+
+```sh
+unset ANTHROPIC_API_KEY
+SOMBRA_CLAUDE_LOGIN=1 uv run pytest -m network -s -rs \
+    tests/brain/test_brain_claude_network.py \
+    tests/summary/test_summary_network.py \
+    tests/orchestrator/test_orchestrator_ask_network.py
+```
+
+`-rs` lists every skip with its reason. The tests pick the backend like this (`tests/claude_backend.py`):
+
+| `ANTHROPIC_API_KEY` | `SOMBRA_CLAUDE_LOGIN` | `claude` on `PATH` | Runs on |
+| --- | --- | --- | --- |
+| set | any | any | the API, exactly as before |
+| unset | `1` | yes | the `claude` login |
+| unset | `1` | no | skipped: "the claude CLI is not on PATH" |
+| unset | anything else | any | skipped: "ANTHROPIC_API_KEY not set …", as before |
+
+On the login the brain runs as `ClaudeCodeBrain` (the `claude-code` backend) and the summary as `ClaudeCliTextModel`. `SOMBRA_CLAUDE_CODE_MODEL` picks the brain's model and `SOMBRA_SUMMARY_MODEL` the summary's; unset, the CLI uses its own default. What each file checks there:
+
+| File | Checked on the login | Skipped on the login, and why |
+| --- | --- | --- |
+| `tests/brain/test_brain_claude_network.py` | the five answers, their latency and the CLI's cache hit rate (printed), that the run used the subscription (`apiKeySource`), and that every tool call outside the meeting folder was denied | the ≥ 80% cache-hit assertion (#9): the CLI places its own cache breakpoints and adds its own prompt, so its rate says nothing about `ClaudeBrain`'s cache layout |
+| `tests/summary/test_summary_network.py` | the epoch summary length and the minutes with ≥ 3 action items (#12); token counts are printed | `test_cost_on_30min_fixture`: the subscription isn't billed per token, so there is no USD cost to report |
+| `tests/orchestrator/test_orchestrator_ask_network.py` | everything (#20, #77): cited `[HH:MM:SS]` exist in the transcript, the facts are in the answer, and the unanswerable question says "não está na transcrição" | nothing |
+
+The cache rate for #9 and the cost for #12 still need an API-key run (`ANTHROPIC_API_KEY=... uv run pytest -m network …`).
+
 ## Left for a human
 
 These need real logins and are not run in CI:
