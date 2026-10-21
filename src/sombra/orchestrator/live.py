@@ -47,6 +47,8 @@ from sombra.summary import TextModel
 
 log = logging.getLogger(__name__)
 
+ABORTED = "sombra: abortado; a ata não foi gravada\n"  # the second Ctrl+C
+
 
 @dataclass(frozen=True, slots=True)
 class LivePlan:
@@ -238,18 +240,31 @@ def run_in_terminal(plan: LivePlan, **kwargs: Any) -> None:  # pragma: no cover 
         loop = asyncio.get_running_loop()
 
         def on_sigint() -> None:
-            loop.remove_signal_handler(signal.SIGINT)  # a second Ctrl+C aborts
+            loop.add_signal_handler(signal.SIGINT, abort)  # a second Ctrl+C aborts
             stop.request()
+
+        def abort() -> None:
+            # Raised from the loop's own handler rather than Python's default one: the
+            # loop's wakeup fd sees a SIGINT that the OS delivered to any thread (#83).
+            loop.remove_signal_handler(signal.SIGINT)
+            raise KeyboardInterrupt
 
         loop.add_signal_handler(signal.SIGINT, on_sigint)
         await run_live(plan, stop, on_ui_url=lambda url: _announce(url, open_in_browser), **kwargs)
 
-    asyncio.run(main())
+    try:
+        asyncio.run(main())
+    except KeyboardInterrupt:
+        sys.stderr.write(ABORTED)
+        raise
 
 
-def run_with_window(plan: LivePlan, shortcut: str) -> None:  # pragma: no cover - needs macOS
+def run_with_window(  # pragma: no cover - needs macOS
+    plan: LivePlan, shortcut: str, **kwargs: Any
+) -> None:
     """The session in a worker thread; the always-on-top overlay and the pause shortcut
     on the main thread (Cocoa needs it there). Closing the window or Ctrl+C stops.
+    ``kwargs`` go to :func:`run_live` (tests pass fakes).
     """
     from sombra.privacy.hotkey import MacHotkey
     from sombra.ui.window import open_window
@@ -266,7 +281,7 @@ def run_with_window(plan: LivePlan, shortcut: str) -> None:  # pragma: no cover 
 
     def worker() -> None:
         try:
-            asyncio.run(run_live(plan, stop, on_ui_url=on_url, pause=pause))
+            asyncio.run(run_live(plan, stop, on_ui_url=on_url, pause=pause, **kwargs))
         except BaseException as e:
             errors.append(e)
         finally:
@@ -287,13 +302,13 @@ def run_with_window(plan: LivePlan, shortcut: str) -> None:  # pragma: no cover 
     except KeyboardInterrupt:
         pass
     finally:
-        if hotkey is not None:
-            hotkey.stop()
-        stop.request()
-        try:
+        try:  # the second Ctrl+C can land anywhere in here, not only in the join
+            if hotkey is not None:
+                hotkey.stop()
+            stop.request()
             join_interruptibly(thread)
         except KeyboardInterrupt:
-            sys.stderr.write("sombra: abortado; a ata não foi gravada\n")
+            sys.stderr.write(ABORTED)
             raise
     if errors:
         raise errors[0]
