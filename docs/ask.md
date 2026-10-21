@@ -15,13 +15,15 @@ sombra ask latest "O que estava no gráfico?" --frames           # let the agent
 | --- | --- |
 | `--frames` | the agent may view screenshots (`frames/fNNNN.jpg`) by their `TELA` id. Without it, no image is sent to the model; the agent only sees window titles. |
 | `--model` | model id or alias (`opus`, `sonnet`, `haiku`); default `[models] agent` from the user config |
-| `--config` | user config file (default `~/.config/sombra/config.toml`); `meetings_root` and `[user]` come from it |
+| `--config` | user config file (default `~/.config/sombra/config.toml`); `meetings_root` comes from it, and `[user]` names you (EU) only for a meeting that recorded no names (see below) |
 
 The answer goes to stdout; the meeting folder, model, elapsed time, frames viewed, token usage and any cited times that were removed go to stderr. Exit codes: `0` answered, `1` the agent or API failed, `2` bad arguments (unknown meeting, empty question, invalid config, no API key).
 
 ## How it answers
 
 The configured brain (`[brain] backend`: `claude-api`, `claude-code` or `codex`, see [providers.md](providers.md)) starts **read-only** on the meeting folder with a post-meeting system prompt (`brain/system_prompt_ask_pt.md`): the whole transcript is in the prompt, `summary.md` is added when it exists, and the agent can grep and read `transcript.md`, `summary.md` and `context/`. It is told to cite every claim with the `[HH:MM:SS]` of the transcript line and, when the records do not hold the answer, to start with "Isso não está na transcrição." As in a live meeting, transcript, summary and context are passed as untrusted data, never as instructions.
+
+The prompt names you (EU) as the meeting recorded it, not as the current config does (#86): the first entry of `aliases` in the meeting's `meeting.toml` is your name and the rest are your aliases. `sombra start` writes `[user]`'s name and aliases there, and `sombra replay --user Maria` writes `["Maria"]`, so asking about that replay under `name = "Nick"` still treats Maria as EU. Only a meeting with no `aliases` (or an unreadable `meeting.toml`) falls back to the config's `[user]`.
 
 Without `--frames`, `claude-api` strips every image from the requests. The CLI backends (`claude-code`, `codex`) read files with their own tools, so they are started on a private temporary copy of the meeting folder without `frames/`, removed right after the question.
 

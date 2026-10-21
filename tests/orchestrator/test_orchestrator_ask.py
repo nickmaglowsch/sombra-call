@@ -37,11 +37,15 @@ from sombra.orchestrator.ask import (
     MeetingNotFoundError,
     ask_trigger,
     claude_brain,
+    claude_code_brain,
+    codex_brain,
     list_meetings,
+    meeting_user,
     read_summary,
     resolve_meeting,
     resolve_model,
 )
+from sombra.store import create_meeting
 
 # --- helpers ---------------------------------------------------------------------------
 
@@ -275,7 +279,7 @@ async def test_claude_brain_sends_the_post_meeting_variant(root: Path) -> None:
     assert script.closed
     [request] = script.requests  # no warm-up call for a single question
     system = request["system"][0]["text"]
-    assert system == post_meeting_system_prompt("Nick", ["Nico"])
+    assert system == post_meeting_system_prompt("Nick", [])  # meeting.toml: ["Nick"]
     assert request["model"] == "claude-sonnet-5-5"  # "sonnet" from the config
     body = _all_text(request)
     assert "[14:31:02] EU: combinamos que o beta sai na sexta" in body  # transcript prefix
@@ -283,6 +287,46 @@ async def test_claude_brain_sends_the_post_meeting_variant(root: Path) -> None:
     assert "Qual o prazo do beta?" in body
     assert "view_frame" not in {t["name"] for t in request["tools"]}
     assert "image" not in _types(request)
+
+
+async def test_eu_is_the_meeting_user_not_the_current_config(root: Path) -> None:
+    """#86: a meeting replayed with ``--user Maria`` is asked about under ``name = "Nick"``."""
+    meeting = create_meeting(root, "ask-user", aliases=("Maria",), started_at=STARTED)
+    script = Script(_text_reply("Foi o Rafael [14:30:05]."))
+    brain = claude_brain(meeting, _cfg(root), frames=False, client=script)
+    await ask_mod.ask(brain, meeting, "Quem pediu para a Maria explicar?", frames=False, clock=_now)
+
+    system = script.requests[0]["system"][0]["text"]
+    assert system == post_meeting_system_prompt("Maria", [])
+    assert "Nick" not in system and "Nico" not in system
+
+
+def test_cli_backends_name_the_meeting_user(root: Path) -> None:
+    meeting = create_meeting(root, "ask-user", aliases=("Maria",), started_at=STARTED)
+    code = claude_code_brain(meeting, _cfg(root), frames=False)
+    codex = codex_brain(meeting, _cfg(root), frames=False)
+    for settings in (code.settings, codex.settings):
+        assert (settings.user_name, tuple(settings.aliases)) == ("Maria", ())
+
+
+def test_meeting_user_keeps_recorded_aliases_after_the_name(root: Path) -> None:
+    meeting = create_meeting(root, "d", aliases=("Maria", " ", "Mari", "Maria"), started_at=STARTED)
+    assert meeting_user(meeting, _cfg(root)) == ("Maria", ("Mari",))
+
+
+def test_meeting_user_falls_back_to_the_config_without_recorded_names(root: Path) -> None:
+    meeting = create_meeting(root, "d", started_at=STARTED)  # aliases = []
+    assert meeting_user(meeting, _cfg(root)) == ("Nick", ("Nico",))
+
+
+def test_meeting_user_falls_back_when_meeting_toml_is_unreadable(root: Path) -> None:
+    meeting = create_meeting(root, "d", aliases=("Maria",), started_at=STARTED)
+    (meeting / "meeting.toml").write_text("aliases = [\n", encoding="utf-8")
+    assert meeting_user(meeting, _cfg(root)) == ("Nick", ("Nico",))
+    (meeting / "meeting.toml").unlink()
+    assert meeting_user(meeting, _cfg(root)) == ("Nick", ("Nico",))
+    nameless = UserConfig(meetings_root=root)
+    assert meeting_user(meeting, nameless) == ("o usuário", ())
 
 
 async def test_without_frames_no_image_leaves_the_machine(root: Path) -> None:
@@ -312,7 +356,7 @@ async def test_with_frames_the_agent_can_view_a_frame(root: Path) -> None:
     first, second = script.requests
     assert first["model"] == "claude-opus-5-5"
     assert "view_frame" in {t["name"] for t in first["tools"]}
-    assert first["system"][0]["text"] == post_meeting_system_prompt("Nick", ["Nico"], frames=True)
+    assert first["system"][0]["text"] == post_meeting_system_prompt("Nick", [], frames=True)
     assert "image" in _types(second)
     assert result.response.frames_sent == ["f0001"]
 

@@ -9,6 +9,8 @@ and, with ``--frames``, looks at screenshots by their ``TELA`` id.
 
 The agent is the one ``[brain] backend`` names (#47): Claude over the API with the key
 from the OS keychain, the Claude Code CLI on the user's subscription, or the Codex CLI.
+EU is the user the meeting recorded in ``meeting.toml`` (:func:`meeting_user`, #86), not
+whoever the current config names; ``[user]`` is only the fallback.
 Without ``--frames`` no screenshot may leave the machine. The API backend enforces
 that with :class:`FrameGate`; the CLI backends read files themselves, so they run on
 :class:`FramelessView`, a private copy of the folder without ``frames/``.
@@ -51,7 +53,7 @@ from sombra.brain.claude import (
 )
 from sombra.brain.claude_code import ClaudeCodeBrain, ClaudeCodeRunner, ClaudeCodeSettings
 from sombra.brain.codex import CodexBrain, CodexRunner, CodexSettings
-from sombra.config import BrainConfig, UserConfig
+from sombra.config import BrainConfig, ConfigError, UserConfig, load_meeting_config
 from sombra.contracts import AutonomyLevel, Brain, BrainRequest, BrainResponse, TriggerEvent
 from sombra.orchestrator.citations import check_citations, clock_hint, transcript_times
 from sombra.store import read_started_at, slugify
@@ -262,6 +264,26 @@ def resolve_model(name: str) -> str:
     return MODEL_ALIASES.get(name.casefold(), name)
 
 
+def meeting_user(meeting_dir: Path, cfg: UserConfig) -> tuple[str, tuple[str, ...]]:
+    """Who EU is in this meeting: ``(name, other aliases)`` for the brain's prompt.
+
+    ``meeting.toml`` records the names the meeting was started (or replayed) with,
+    the user's name first (``sombra start`` writes ``[user]``'s name and aliases;
+    ``sombra replay --user Maria`` writes ``["Maria"]``). The question may be asked
+    later under another config, so the meeting wins; the current ``[user]`` is only
+    the fallback for a meeting that recorded no names or whose ``meeting.toml`` does
+    not load.
+    """
+    try:
+        recorded = load_meeting_config(meeting_dir).aliases
+    except (OSError, ConfigError):
+        recorded = ()
+    names = tuple(dict.fromkeys(a.strip() for a in recorded if a.strip()))
+    if names:
+        return names[0], names[1:]
+    return cfg.user.name or "o usuário", tuple(cfg.user.aliases)
+
+
 def claude_brain(
     meeting_dir: Path,
     cfg: UserConfig,
@@ -278,9 +300,10 @@ def claude_brain(
     the 5-minute cache TTL, since it is a single question. ``api_key`` is the keychain
     lookup (``sombra auth set anthropic``); ``client`` replaces it in tests.
     """
+    user_name, aliases = meeting_user(meeting_dir, cfg)
     settings = ClaudeSettings(
-        user_name=cfg.user.name or "o usuário",
-        aliases=cfg.user.aliases,
+        user_name=user_name,
+        aliases=aliases,
         level=AutonomyLevel.L1,  # unused by the post-meeting prompt
         model=resolve_model(model or cfg.models.agent),
         max_tokens=2048,
@@ -310,9 +333,10 @@ def claude_code_brain(
     runner: ClaudeCodeRunner | None = None,
 ) -> ClaudeCodeBrain:
     """:class:`ClaudeCodeBrain` for one question, on the user's Claude subscription."""
+    user_name, aliases = meeting_user(meeting_dir, cfg)
     settings = ClaudeCodeSettings(
-        user_name=cfg.user.name or "o usuário",
-        aliases=cfg.user.aliases,
+        user_name=user_name,
+        aliases=aliases,
         level=AutonomyLevel.L1,  # unused by the post-meeting prompt
         model=model,
         effort=None,
@@ -332,9 +356,10 @@ def codex_brain(
     runner: CodexRunner | None = None,
 ) -> CodexBrain:
     """:class:`CodexBrain` for one question; ``api_key=None`` uses ``codex login``."""
+    user_name, aliases = meeting_user(meeting_dir, cfg)
     settings = CodexSettings(
-        user_name=cfg.user.name or "o usuário",
-        aliases=cfg.user.aliases,
+        user_name=user_name,
+        aliases=aliases,
         level=AutonomyLevel.L1,
         model=model,
         reasoning_effort=None,
