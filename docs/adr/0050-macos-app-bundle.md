@@ -1,6 +1,6 @@
 # ADR 0050: A self-signed `Sombra.app`, built with PyInstaller, owns the macOS permissions
 
-- Status: **provisional**. CI on `macos-14` builds, signs and exercises the bundle, the CLI shim, the ad-hoc and self-signed signatures, the designated requirement and the release gate (see [Evidence](#evidence-from-ci)). What needs the owner's certificate or a person at a real Mac (the System Settings entries, prompts, grants surviving an upgrade, a live meeting) waits for a human run. See [Left for a human](#left-for-a-human).
+- Status: **accepted** (2026-10-01). CI on `macos-14` covers the bundle, the shim, both signatures, the designated requirement and the release gate ([Evidence](#evidence-from-ci)). The owner's Mac (macOS 27) covered the rest: prompts, System Settings, grants kept across installs and the Homebrew upgrade, and live meetings ([Results](#left-for-a-human)).
 - Date: 2026-09-30
 - Issue: #50 (epic #43; follow-up from ADR 0044). The Homebrew cask (#51) consumes the release asset defined here.
 - Numbering: this ADR uses the issue number, as ADRs 0009, 0018, 0044 and 0046 do.
@@ -268,6 +268,20 @@ With the entitlement, `sombra doctor` through the shim reported `permissions hol
 - A Developer ID can be added later without changing the bundle id. Users would re-grant once, because the requirement would change from our certificate to Apple's anchor.
 
 ## Left for a human
+
+**Done** on the owner's MacBook Pro (M4 Pro), macOS 27.0, from v0.1.0-rc1 to v0.1.1. Details are on #50.
+
+- Identity created once and pinned (`61053ed7…a3c0`). The `.p12` is backed up offline.
+- The manual Release run signed with it; rc1, rc2 and rc3 published without an ad-hoc label.
+- rc1 didn't start on macOS 27 (library validation; see [Evidence from a real Mac](#evidence-from-a-real-mac-macos-27)). Fixed for rc2.
+- `sombra doctor` reports the holder as Sombra and the certificate signature. The prompts named Sombra, and System Settings lists Sombra.
+- The `log stream` AttributionChain named Sombra for every access in two live sessions.
+- The transcript had EU and OUTROS, and screenshots were taken.
+- Grants were kept across an uninstall/reinstall, rc2 → rc3, and rc3 → v0.1.1 through Homebrew: `doctor` 18 ok, no prompt.
+- Browser path: Open Anyway works, and the docs say nothing opens afterwards.
+
+The original checklist:
+
 
 1. Run `sh scripts/release/make-signing-identity.sh` once on a trusted machine. Add the two secrets, and put the printed SHA-256 in `packaging/macos/signing-cert.sha256` through a PR. Back up the `.p12` and its password offline. Steps: [docs/release.md](../release.md#signing-sombraapp-the-free-path).
 2. Run **Actions → Release → Run workflow** on `main`. The **app** job must sign with the project's certificate (summary: "the project's self-signed certificate"), and **app-smoke (release)** must pass `app_gate.py ready`. Then push an rc tag (`v0.2.0-rc1`) and check that the pre-release lists `Sombra-0.2.0rc1-macos-arm64.zip` in `SHA256SUMS`, without an ad-hoc label.
