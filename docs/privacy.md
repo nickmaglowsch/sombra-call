@@ -17,7 +17,7 @@ Type `sim` to confirm participants were told. Sombra writes `consent.json` (OS u
 | Global shortcut (macOS) | default **⌃⌥⌘P**; configurable as `ctrl+alt+cmd+p` or `⌃⌥⌘P` |
 | `sombra pause` / `sombra resume` | from any terminal, through the local control socket |
 
-The shortcut works while another app (the call) is focused. For that, grant Sombra (or your terminal while developing) access under **System Settings → Privacy & Security → Accessibility**.
+The shortcut works while another app (the call) is focused. For that, grant Sombra (or your terminal while developing) access under **System Settings → Privacy & Security → Accessibility**. If it isn't trusted, `sombra start` logs a warning naming that pane and the session runs without the shortcut. Switch Sombra on, then restart `sombra`; macOS only applies the grant to a new process. Input Monitoring is not needed.
 
 The control socket is `$XDG_RUNTIME_DIR/sombra/control.sock`, or `~/.sombra/run/control.sock` when that variable is unset. Its directory is `0700` and the socket is `0600`. The server also checks the peer's UID on every connection (`SO_PEERCRED` on Linux, `LOCAL_PEERCRED` on macOS), so only your user can pause or resume. Use `--socket PATH` to point at a different socket.
 
