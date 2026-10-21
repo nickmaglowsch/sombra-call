@@ -53,7 +53,7 @@ from sombra.brain.claude import (
 )
 from sombra.brain.claude_code import ClaudeCodeBrain, ClaudeCodeRunner, ClaudeCodeSettings
 from sombra.brain.codex import CodexBrain, CodexRunner, CodexSettings
-from sombra.config import BrainConfig, ConfigError, UserConfig, load_meeting_config
+from sombra.config import BrainConfig, UserConfig, load_meeting_config
 from sombra.contracts import AutonomyLevel, Brain, BrainRequest, BrainResponse, TriggerEvent
 from sombra.orchestrator.citations import check_citations, clock_hint, transcript_times
 from sombra.store import read_started_at, slugify
@@ -276,7 +276,7 @@ def meeting_user(meeting_dir: Path, cfg: UserConfig) -> tuple[str, tuple[str, ..
     """
     try:
         recorded = load_meeting_config(meeting_dir).aliases
-    except (OSError, ConfigError):
+    except (OSError, ValueError):  # ConfigError, or bytes that are not UTF-8
         recorded = ()
     names = tuple(dict.fromkeys(a.strip() for a in recorded if a.strip()))
     if names:

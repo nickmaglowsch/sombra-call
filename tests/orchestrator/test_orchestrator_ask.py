@@ -323,6 +323,8 @@ def test_meeting_user_falls_back_when_meeting_toml_is_unreadable(root: Path) -> 
     meeting = create_meeting(root, "d", aliases=("Maria",), started_at=STARTED)
     (meeting / "meeting.toml").write_text("aliases = [\n", encoding="utf-8")
     assert meeting_user(meeting, _cfg(root)) == ("Nick", ("Nico",))
+    (meeting / "meeting.toml").write_bytes(b'name = "x"\naliases = ["\xff"]\n')  # not UTF-8
+    assert meeting_user(meeting, _cfg(root)) == ("Nick", ("Nico",))
     (meeting / "meeting.toml").unlink()
     assert meeting_user(meeting, _cfg(root)) == ("Nick", ("Nico",))
     nameless = UserConfig(meetings_root=root)
